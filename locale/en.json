@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Terminal Workbench",
+    "description": "Replaces the built-in three-column layout and the sidebar terminal with one workbench: sessions on the left, a self-drawn xterm in the middle, conversation on the right. Also gives the model terminal_run / terminal_send / terminal_read, plus a reverse channel: select output in the terminal and send it to the current conversation with one click or a shortcut."
+  }
+}

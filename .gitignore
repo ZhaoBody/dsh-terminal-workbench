@@ -1,0 +1,22 @@
+# 依赖与本地状态
+node_modules/
+.dsh-terminal-workbench/
+
+# 备份与打包产物（可随时从当前树重建）
+*.bak
+*.bak-*
+*.orig
+*.rej
+*.tmp
+backup/
+*.tgz
+*.zip
+
+# 本地环境与凭据
+.env
+.env.*
+
+# 临时日志与系统文件
+*.log
+.DS_Store
+coverage/

@@ -1,0 +1,80 @@
+{
+  "name": "dsh-terminal-workbench",
+  "version": "0.13.11",
+  "description": "DSH 终端工作台：三栏布局 + 自绘 xterm 渲染，单插件实现（替代 ui-layout 与 ui-sidebar-terminal）。",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "terminal",
+    "xterm",
+    "ssh",
+    "rtsp",
+    "camera",
+    "workbench"
+  ],
+  "author": "DSH Terminal Workbench contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZhaoBody/dsh-terminal-workbench.git"
+  },
+  "homepage": "https://github.com/ZhaoBody/dsh-terminal-workbench#readme",
+  "bugs": {
+    "url": "https://github.com/ZhaoBody/dsh-terminal-workbench/issues"
+  },
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "lib",
+    "locale",
+    "src",
+    "build.mjs",
+    "icon.svg",
+    "client.js",
+    "client.terminal.js",
+    "client-fs-panel.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node verify/run-all.mjs",
+    "check": "node verify/run-all.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "ssh2": "^1.17.0"
+  },
+  "devDependencies": {
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/addon-search": "0.16.0",
+    "@xterm/addon-web-links": "0.12.0",
+    "@xterm/addon-webgl": "0.19.0",
+    "@xterm/xterm": "6.0.0",
+    "esbuild": "0.28.2"
+  }
+}

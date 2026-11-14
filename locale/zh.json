@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "终端工作台",
+    "description": "用一个插件同时接管内置三栏布局与侧栏终端：左侧会话、中间自绘 xterm、右侧对话；并向模型提供 terminal_run / terminal_send / terminal_read 三个终端工具；另有「发给对话」反向通道：终端里选中输出，一键或快捷键发进当前会话。"
+  }
+}

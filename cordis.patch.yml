@@ -1,0 +1,13 @@
+# 终端工作台：一个插件同时接管布局层与终端渲染层。
+#   - 禁用内置三栏 AppFrame（ui-layout），改由本插件接管 root 槽；
+#   - 禁用内置终端（ui-sidebar-terminal），改由本插件注册同 kind 的自绘 xterm。
+# 数据层仍是 api-terminal-controller 的 webTerminals，只换渲染与编排。
+- id: ui-layout
+  disabled: true
+
+- id: ui-sidebar-terminal
+  disabled: true
+
+- insert:
+    - id: terminal-workbench
+      name: 'dsh-terminal-workbench'
