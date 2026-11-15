@@ -104,6 +104,9 @@
   同时修掉面板 chunk 文件名不合规导致的整块空白：宿主只接受
   `client.<name>.js`，旧名 `client-fs-panel.js` 会让 `require.async` 抛错，
   连终端渲染树一起崩掉；现在改名为 `client.fs-panel.js` 并加了装载契约回归。
+- **文件按钮让位抽屉**（v0.13.15）：面板打开后「文件」按钮不再停在原地压住面板
+  头部，而是退到面板左外侧当抽屉把手（偏移量与面板宽度同用
+  `min(380px, 72%)`），面板头部原本为悬浮按钮预留的 34px 顶部内边距也收回到 8px。
 - **展现方式**：适应 / 铺满切换、双击画面或按钮全屏（原生全屏不可用时自动退到窗口内全屏）、保存当前画面、
   分辨率与播放模式角标、暂停 / 重连；适应 / 铺满按相机书签记住。
 - 口令只在建立会话的请求体里，会话 id 随机、内存态、30 分钟 TTL，
@@ -461,7 +464,7 @@ dsh plugin --profile <profile> add "file:$(pwd)/dsh-terminal-workbench-<version>
 npm test          # 等价于 node verify/run-all.mjs
 ```
 
-当前基线：**语法 14/14，测试 26 个文件 / 450 项全绿**。
+当前基线：**语法 14/14，测试 26 个文件 / 451 项全绿**。
 
 | 测试 | 项数 | 覆盖 |
 |---|---:|---|
@@ -474,7 +477,7 @@ npm test          # 等价于 node verify/run-all.mjs
 | `camera-api-test.mjs` | 40 | 相机代理会话、RTSP 地址编码、品牌路径探测与自动纠正、H.265→H.264 编码探测与自动切换、同连接 Digest 认证、go2rtc 流复用/引用计数、tmpfs 临时目录、播放器缓存与 gzip、低延迟缓冲、Digest/Basic、MJPEG/快照、错误路径 |
 | `camera-ws-proxy-test.mjs` | 6 | 同源 WebSocket 代理：Upgrade 透传、Origin 拒绝、非法流名、go2rtc 未运行、registerUpgrade 精确路径、旧 webServer 跳过 |
 | `client-blocks-test.cjs` | 15 | 前端命令块解析与跳转 |
-| `client-fs-panel-test.cjs` | 17 | chunk 装载契约、面板纯函数；SSH 契约需 `TWB_E2E=1` |
+| `client-fs-panel-test.cjs` | 18 | chunk 装载契约、面板纯函数；SSH 契约需 `TWB_E2E=1` |
 | `client-p1-test.cjs` | 11 | IPv6 转发解析、askpass 并发隔离 |
 | `client-terminal-access-test.cjs` | 10 | 访问角标映射、终端身份解析、快照隔离、无授权/撤销入口 |
 | `forward-parse-test.mjs` | 31 | 转发规格、跳板链、管理器边界 |

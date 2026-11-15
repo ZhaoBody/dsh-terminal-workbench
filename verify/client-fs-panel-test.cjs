@@ -107,6 +107,22 @@ async function main() {
       `client.js 没有按需加载 ./${path.basename(PANEL)}`,
     )
   })
+  await test('面板打开后按钮让到面板外侧，不遮面板头部', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'client.js'), 'utf8')
+    /* 面板宽度和按钮偏移必须用同一个表达式；只改一处会让按钮重新压到面板上。 */
+    assert.ok(
+      src.includes('.tp-fs{position:absolute;right:0;top:0;bottom:0;z-index:39;width:min(380px,72%)'),
+      '面板宽度表达式变了：同步修改 .tp-fs-toggle[data-open=true] 的 right 偏移',
+    )
+    assert.ok(
+      src.includes('.tp-fs-toggle[data-open=true]{right:calc(min(380px,72%) + 2px)'),
+      '打开态按钮没有让到面板左外侧',
+    )
+    assert.ok(
+      src.includes('.tp-fs-head{display:flex;align-items:center;gap:4px;padding:8px 8px 6px 8px'),
+      '面板头部还留着给悬浮按钮让位的顶部内边距',
+    )
+  })
 
   console.log('\n[1] 路径纯函数')
   await test('parseRemotePath 拆出别名与路径', () => {

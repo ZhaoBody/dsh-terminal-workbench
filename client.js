@@ -662,7 +662,7 @@ window.__ModuleLoader__.load({
     var CAMERA_CACHE = null
     /* 构建版本戳：自测用它判断浏览器加载的是否为磁盘上的最新构建。
        每次实质性改动手动 bump，避免拿旧产物当证据。 */
-    var BUILD_STAMP = '2026-11-15.03'
+    var BUILD_STAMP = '2026-11-15.04'
     var FILES_COLLAPSED_KEY = 'dsh-terminal-workbench.fileRowCollapsed'
 
     function readFilesCollapsed() {
@@ -1743,12 +1743,14 @@ window.__ModuleLoader__.load({
       '@container (max-width: 560px){.tp-send-hint{display:none}}',
       /* ---------- 文件面板抽屉（v0.8.0 / S3） ----------
          从右侧滑出，宽度跟随面板：面板很窄时不硬撑，直接占满省得两个都挤。 */
-      '.tp-fs-toggle{position:absolute;right:16px;top:8px;z-index:40;display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;border-radius:999px;border:.5px solid var(--dsw-alias-border-l2,#2c2c2e);background:rgba(18,18,20,.85);color:#a1a1aa;font-size:11px;cursor:pointer;pointer-events:auto}',
+      '.tp-fs-toggle{position:absolute;right:16px;top:8px;z-index:40;display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;border-radius:999px;border:.5px solid var(--dsw-alias-border-l2,#2c2c2e);background:rgba(18,18,20,.85);color:#a1a1aa;font-size:11px;cursor:pointer;pointer-events:auto;transition:right 140ms ease-out}',
       '.tp-fs-toggle:hover{color:#e5e7eb;border-color:var(--dsw-alias-brand-primary,#4f6ef2)}',
-      '.tp-fs-toggle[data-open=true]{color:#e5e7eb;border-color:var(--dsw-alias-brand-primary,#4f6ef2);background:rgba(30,32,48,.92)}',
+      /* 面板打开后按钮让到面板左外侧，当抽屉把手用：留在原地会盖住面板头部。
+         偏移量必须跟 .tp-fs 的宽度表达式一致（min(380px,72%)），改宽度时一起改。 */
+      '.tp-fs-toggle[data-open=true]{right:calc(min(380px,72%) + 2px);border-radius:8px 0 0 8px;border-right:0;color:#e5e7eb;border-color:var(--dsw-alias-brand-primary,#4f6ef2);background:rgba(30,32,48,.92)}',
       '.tp-fs{position:absolute;right:0;top:0;bottom:0;z-index:39;width:min(380px,72%);display:flex;flex-direction:column;background:rgba(14,14,16,.97);border-left:.5px solid var(--dsw-alias-border-l2,#2c2c2e);box-shadow:-8px 0 24px rgba(0,0,0,.45);pointer-events:auto;animation:tp-fs-in 140ms ease-out}',
       '@keyframes tp-fs-in{from{transform:translateX(12px);opacity:0}to{transform:none;opacity:1}}',
-      '.tp-fs-head{display:flex;align-items:center;gap:4px;padding:34px 8px 6px 8px;flex:none}',
+      '.tp-fs-head{display:flex;align-items:center;gap:4px;padding:8px 8px 6px 8px;flex:none}',
       '.tp-fs-alias{flex:1;min-width:0;height:22px;border-radius:6px;border:.5px solid var(--dsw-alias-border-l2,#2c2c2e);background:#1a1a1d;color:#e5e7eb;font-size:11px;padding:0 4px}',
       '.tp-fs-btn{height:22px;min-width:22px;padding:0 6px;border-radius:6px;border:.5px solid var(--dsw-alias-border-l2,#2c2c2e);background:transparent;color:#a1a1aa;font-size:11px;cursor:pointer;flex:none}',
       '.tp-fs-btn:hover:not(:disabled){color:#e5e7eb;border-color:var(--dsw-alias-brand-primary,#4f6ef2)}',
