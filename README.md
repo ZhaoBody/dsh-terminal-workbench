@@ -91,6 +91,11 @@
   现在所有书签会话都会检查屏幕尾部：只有「最后一行是空提示符」且「最后 4 行内
   出现强断线文本」才判开；裸 `Broken pipe`、提示符后已敲新命令、旧输出里的断线词
   都不会误判。恢复/重挂载时还会主动补查一次，不必等下一次输出。
+- **右栏全屏真正铺满**（v0.13.13）：宿主右栏面板的「全屏」按钮只把
+  `rightbarFullscreen` 写进 store，旧布局从不读它，点了等于没反应。现在全屏时网格
+  切成 `0px minmax(0px, 1fr) 0px`：左右列归零并隐藏，终端列吃满视口，相机浮层和
+  两根拖拽把手一并收起；宿主面板原本写死的 `100vw` 改成贴合列宽的 `100%`，
+  不再横向溢出。再点一次「退出全屏」即可回到原来的三栏宽度。
 - **展现方式**：适应 / 铺满切换、双击画面或按钮全屏（原生全屏不可用时自动退到窗口内全屏）、保存当前画面、
   分辨率与播放模式角标、暂停 / 重连；适应 / 铺满按相机书签记住。
 - 口令只在建立会话的请求体里，会话 id 随机、内存态、30 分钟 TTL，
@@ -448,7 +453,7 @@ dsh plugin --profile <profile> add "file:$(pwd)/dsh-terminal-workbench-<version>
 npm test          # 等价于 node verify/run-all.mjs
 ```
 
-当前基线：**语法 14/14，测试 24 个文件 / 418 项全绿**。
+当前基线：**语法 14/14，测试 25 个文件 / 433 项全绿**。
 
 | 测试 | 项数 | 覆盖 |
 |---|---:|---|
@@ -465,6 +470,7 @@ npm test          # 等价于 node verify/run-all.mjs
 | `client-p1-test.cjs` | 11 | IPv6 转发解析、askpass 并发隔离 |
 | `client-terminal-access-test.cjs` | 10 | 访问角标映射、终端身份解析、快照隔离、无授权/撤销入口 |
 | `forward-parse-test.mjs` | 31 | 转发规格、跳板链、管理器边界 |
+| `fullscreen-layout-test.cjs` | 15 | 右栏全屏网格（左右归零、中列吃满、脏值不触发）、退出复原、DOM 接线与宿主面板宽度 |
 | `fs-api-test.mjs` | 11 | 文件面板 HTTP 契约 |
 | `host-tools-contract-test.mjs` | 20 | 宿主工具注册、参数路由、审批分支 |
 | `remote-fs-path-test.mjs` | 16 | 远端 POSIX 路径归一化 |

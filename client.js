@@ -340,6 +340,34 @@ window.__ModuleLoader__.load({
       return { sidebar: s, center: Math.max(0, viewport - s - r), rightbar: r };
     }
 
+    /**
+     * 解整帧网格。原生右栏的「全屏」经 layout.openRightbar(track, fullscreen)
+     * 落到 layoutInfo.rightbarFullscreen；只存不用于布局的话按钮点了没反应，
+     * 所以这里把它翻成「左右列收成 0、中列吃满」的网格。
+     */
+    function computeFrame(layoutInfo, viewport, sidebar, rightbar, collapsedWidth) {
+      var fullscreen =
+        layoutInfo.rightbarFullscreen === true && layoutInfo.rightbarShown === true;
+      if (fullscreen) {
+        return {
+          fullscreen: true,
+          sidebar: 0,
+          center: viewport,
+          rightbar: viewport,
+          gridTemplate: "0px minmax(0px, 1fr) 0px"
+        };
+      }
+      var cols = computeColumns(viewport, sidebar, rightbar, collapsedWidth);
+      return {
+        fullscreen: false,
+        sidebar: cols.sidebar,
+        center: cols.center,
+        rightbar: cols.rightbar,
+        gridTemplate:
+          cols.sidebar + "px minmax(0px, " + cols.rightbar + "px) minmax(400px, 1fr)"
+      };
+    }
+
     /* ---------- 样式 ---------- */
 
     var LAYOUT_CSS = [
@@ -347,8 +375,13 @@ window.__ModuleLoader__.load({
       ":root{--tp-surface:#121214}",
       ".wb-frame{background:var(--tp-surface,#121214);grid-template-rows:100%;height:100%;display:grid;position:relative;overflow:hidden}",
       ".wb-frame[data-dragging]{transition:none}",
+      ".wb-frame[data-rightbar-fullscreen='1'] .wb-sidebar-col,.wb-frame[data-rightbar-fullscreen='1'] .wb-main-col{visibility:hidden;border:0}",
       ".wb-sidebar-col{background:var(--dsw-specific-sidebar-fill);border-right:.5px solid var(--dsw-alias-border-l1);min-width:0;overflow:hidden}",
       ".wb-terminal-col{min-width:0;position:relative;overflow:hidden;border-right:.5px solid var(--dsw-alias-border-l1)}",
+      ".wb-terminal-col[data-fullscreen='1']{border-right:0}",
+      /* 原生右栏全屏把面板宽度写成 100vw；工作台里它挂在终端列内，
+         用 100% 贴合列宽，避免多出滚动条宽度被裁掉。 */
+      ".wb-terminal-col[data-fullscreen='1'] [data-sidebar-right-panel='fullscreen']{width:100%!important;--dsh-sidebar-width:100%!important}",
       ".wb-main-col{flex-direction:column;min-width:0;display:flex;overflow:hidden}",
       ".wb-handle{cursor:col-resize;z-index:11;touch-action:none;width:8px;margin-left:-4px;position:absolute;top:0;bottom:0}",
       ".wb-handle:hover,.wb-handle[data-active]{background:var(--dsw-alias-brand-primary,#4f6ef2);opacity:.35}",
@@ -629,7 +662,7 @@ window.__ModuleLoader__.load({
     var CAMERA_CACHE = null
     /* 构建版本戳：自测用它判断浏览器加载的是否为磁盘上的最新构建。
        每次实质性改动手动 bump，避免拿旧产物当证据。 */
-    var BUILD_STAMP = '2026-11-15.01'
+    var BUILD_STAMP = '2026-11-15.02'
     var FILES_COLLAPSED_KEY = 'dsh-terminal-workbench.fileRowCollapsed'
 
     function readFilesCollapsed() {
@@ -10645,7 +10678,11 @@ window.__ModuleLoader__.load({
     }
 
     function TerminalColumn(props) {
-      return jsx("div", { className: "wb-terminal-col", children: props.children });
+      return jsx("div", {
+        className: "wb-terminal-col",
+        "data-fullscreen": props.fullscreen ? "1" : undefined,
+        children: props.children,
+      });
     }
 
     function MainColumn(props) {
@@ -10761,12 +10798,17 @@ window.__ModuleLoader__.load({
       var darwin = document.documentElement.dataset.platform === "darwin";
       var collapsedWidth =
         darwin || document.documentElement.hasAttribute("data-windows-titlebar") ? 0 : 56;
-      var cols = computeColumns(
+      /* 原生右栏的「全屏」会经 layout.openRightbar(track, fullscreen) 进来；
+         之前只存了 rightbarFullscreen 没用于布局，按钮点了等于没反应。 */
+      var frame = computeFrame(
+        layoutInfo,
         viewport,
         sidebarPreference,
         layoutInfo.rightbarShown ? rightbarPreference : 0,
         collapsedWidth
       );
+      var rightbarFullscreen = frame.fullscreen;
+      var cols = frame;
 
       var colsRef = react.useRef(cols);
       colsRef.current = cols;
@@ -10823,12 +10865,12 @@ window.__ModuleLoader__.load({
           /* 收起时也不卸载面板：原生 side-panel 靠常驻挂载同步展开状态，
              卸载后它的展开按钮就不会再出现，收起态将无法恢复。 */
           return renderSlot("rightbar", {
-            width: cols.rightbar,
+            width: rightbarFullscreen ? viewport : cols.rightbar,
             viewportWidth: viewport,
             canShow: true
           });
         },
-        [renderSlot, cols.rightbar, viewport]
+        [renderSlot, cols.rightbar, viewport, rightbarFullscreen]
       );
 
       var main = react.useMemo(
@@ -10845,33 +10887,38 @@ window.__ModuleLoader__.load({
         [renderSlot]
       );
 
-      var gridTemplate =
-        cols.sidebar + "px minmax(0px, " + cols.rightbar + "px) minmax(400px, 1fr)";
+      var gridTemplate = frame.gridTemplate;
 
       return jsxs("div", {
         ref: frameRef,
         className: "wb-frame",
         style: { gridTemplateColumns: gridTemplate },
         "data-sidebar-collapsed": sidebarCollapsed || undefined,
+        "data-rightbar-fullscreen": rightbarFullscreen ? "1" : undefined,
         "data-dragging": dragging || undefined,
         "data-rightbar-shown": layoutInfo.rightbarShown || undefined,
         children: [
           jsx(SidebarColumn, { children: sidebar }),
-          jsx(TerminalColumn, { children: [terminal, jsx(AddPopover, {}), jsx(SettingsDialog, {})] }),
+          jsx(TerminalColumn, {
+            fullscreen: rightbarFullscreen,
+            children: [terminal, jsx(AddPopover, {}), jsx(SettingsDialog, {})]
+          }),
           jsx(MainColumn, { children: main }),
           jsx(CameraDock, {
             left: cols.sidebar + cols.rightbar,
-            visible: cols.rightbar > 0,
+            visible: !rightbarFullscreen && cols.rightbar > 0,
           }),
           jsx("div", { className: "wb-overlay", children: overlays }),
-          !sidebarCollapsed &&
+          !rightbarFullscreen &&
+            !sidebarCollapsed &&
             jsx(DragHandle, {
               left: cols.sidebar,
               onStart: onSidebarStart,
               onDrag: onSidebarDrag,
               onEnd: onDragEnd
             }),
-          cols.rightbar > 0 &&
+          !rightbarFullscreen &&
+            cols.rightbar > 0 &&
             jsx(DragHandle, {
               left: cols.sidebar + cols.rightbar,
               onStart: onRightbarStart,
@@ -11484,6 +11531,15 @@ window.__ModuleLoader__.load({
 
     exports.apply = apply;
     exports.inject = inject;
+    /* 测试缝：三栏宽度与整帧网格是纯算术，全屏是否真的改布局直接在这里验。 */
+    exports.__twbLayout = {
+      computeColumns: computeColumns,
+      computeFrame: computeFrame,
+      sidebarMin: SIDEBAR_MIN,
+      sidebarMax: SIDEBAR_MAX,
+      centerMin: CENTER_MIN,
+      rightbarMin: RIGHTBAR_MIN,
+    };
     /* 测试缝：OSC 133 状态机是纯逻辑，不需要真终端也能驱动。
        生产代码不读它，宿主侧 S5 也可以从这里取同一份块表。 */
     exports.__twbBlocks = {
