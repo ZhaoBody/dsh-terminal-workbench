@@ -86,6 +86,11 @@
   `aria-selected=true`，旧逻辑会退回 DOM 里第一个终端，导致从 A 车终端打开相机却
   显示 B 车终端的前缀。现在记住最后一次选中的终端（按激活分栏判断），相机/网页
   标签激活时继续沿用；切回终端标签后立即跟随新终端。
+- **SSH 假绿兜底**（v0.13.12）：刷新、WebSocket 重连或标签重新挂载会丢掉 OSC777
+  断线信标，恢复会话又默认按「已连接」显示，导致 ssh 已退出、右上角胶囊仍亮绿。
+  现在所有书签会话都会检查屏幕尾部：只有「最后一行是空提示符」且「最后 4 行内
+  出现强断线文本」才判开；裸 `Broken pipe`、提示符后已敲新命令、旧输出里的断线词
+  都不会误判。恢复/重挂载时还会主动补查一次，不必等下一次输出。
 - **展现方式**：适应 / 铺满切换、双击画面或按钮全屏（原生全屏不可用时自动退到窗口内全屏）、保存当前画面、
   分辨率与播放模式角标、暂停 / 重连；适应 / 铺满按相机书签记住。
 - 口令只在建立会话的请求体里，会话 id 随机、内存态、30 分钟 TTL，
@@ -443,7 +448,7 @@ dsh plugin --profile <profile> add "file:$(pwd)/dsh-terminal-workbench-<version>
 npm test          # 等价于 node verify/run-all.mjs
 ```
 
-当前基线：**语法 14/14，测试 24 个文件 / 408 项全绿**。
+当前基线：**语法 14/14，测试 24 个文件 / 418 项全绿**。
 
 | 测试 | 项数 | 覆盖 |
 |---|---:|---|
@@ -464,7 +469,7 @@ npm test          # 等价于 node verify/run-all.mjs
 | `host-tools-contract-test.mjs` | 20 | 宿主工具注册、参数路由、审批分支 |
 | `remote-fs-path-test.mjs` | 16 | 远端 POSIX 路径归一化 |
 | `rescue-patch-test.mjs` | 11 | 启动自救补丁改写：只启用 ui-layout、必须禁用本插件 |
-| `ssh-stability-test.cjs` | 30 | 保活参数、自动重连退避、认证失败不重试、书签指纹、相机前缀持久化、刷新后标题回退到书签名、tabId 重分配后按稳定内容地址恢复、手输 ssh 解析与 rawCommand 重连、断线文本识别 |
+| `ssh-stability-test.cjs` | 40 | 保活参数、自动重连退避、认证失败不重试、书签指纹、相机前缀持久化、刷新后标题回退到书签名、tabId 重分配后按稳定内容地址恢复、手输 ssh 解析与 rawCommand 重连、断线文本识别、屏幕兜底（强断线 + 空提示符 / 折行提示符 / 裸 Broken pipe 与旧输出不误判）、恢复/onWriteParsed 接线 |
 | `terminal-access-api-test.mjs` | 9 | 访问快照、ask/never、只读 405、旧参数兼容 |
 | `terminal-build-test.cjs` | 9 | 构建源/产物/`chunk-rev` 一致性与终端关键能力 |
 | `terminal-close-policy-test.mjs` | 16 | 启动裁剪、重试预算、`missingTerminal` 判定与关闭清理 |

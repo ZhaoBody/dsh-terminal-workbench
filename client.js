@@ -629,7 +629,7 @@ window.__ModuleLoader__.load({
     var CAMERA_CACHE = null
     /* 构建版本戳：自测用它判断浏览器加载的是否为磁盘上的最新构建。
        每次实质性改动手动 bump，避免拿旧产物当证据。 */
-    var BUILD_STAMP = '2026-11-13.05'
+    var BUILD_STAMP = '2026-11-15.01'
     var FILES_COLLAPSED_KEY = 'dsh-terminal-workbench.fileRowCollapsed'
 
     function readFilesCollapsed() {
@@ -3747,6 +3747,33 @@ window.__ModuleLoader__.load({
       /Connection refused/i,
     ]
 
+    /* 屏幕兜底用的强断线信号：不把裸 `Broken pipe` 算进来，避免远端
+       日志里正常出现这个词时误判。`client_loop: send disconnect` 已经
+       覆盖了 ssh 自己打的那行。 */
+    var SSH_DISCONNECT_PROMPT_PATTERNS = [
+      /client_loop:\s*send disconnect/i,
+      /Connection to .* closed/i,
+      /Connection closed by/i,
+      /Connection reset by peer/i,
+      /packet_write_wait/i,
+      /Timeout, server .* not responding/i,
+      /kex_exchange_identification/i,
+      /No route to host/i,
+      /Network is unreachable/i,
+      /ssh: connect to host .* Connection refused/i,
+    ]
+
+    /* 屏幕兜底里的认证失败信号。比 authFailureText 窄：`Permission denied`
+       单独出现可能只是用户 sudo 被拒，不能据此判断 ssh 掉了。 */
+    var SSH_AUTH_PROMPT_PATTERNS = [
+      /Permission denied \((?:publickey|password|keyboard-interactive)/i,
+      /Authentication failed/i,
+      /Too many authentication failures/i,
+      /Host key verification failed/i,
+      /No supported authentication methods available/i,
+      /Load key .*: invalid format/i,
+    ]
+
     /* 弱信号：本地 shell 对被杀进程打的一行。只允许出现在最后几行，
        否则翻到很久以前的 "Terminated" 会误判断线。 */
     var SSH_DISCONNECT_WEAK = /^\s*(?:已终止|Terminated|Killed|Hangup|已挂断)\s*$/m
@@ -3755,6 +3782,14 @@ window.__ModuleLoader__.load({
       if (typeof text !== 'string' || text === '') return false
       for (var index = 0; index < SSH_AUTH_FAILURE_PATTERNS.length; index += 1) {
         if (SSH_AUTH_FAILURE_PATTERNS[index].test(text)) return true
+      }
+      return false
+    }
+
+    function strongAuthFailureText(text) {
+      if (typeof text !== 'string' || text === '') return false
+      for (var index = 0; index < SSH_AUTH_PROMPT_PATTERNS.length; index += 1) {
+        if (SSH_AUTH_PROMPT_PATTERNS[index].test(text)) return true
       }
       return false
     }
@@ -3782,12 +3817,82 @@ window.__ModuleLoader__.load({
       return false
     }
 
+    /* 空提示符：只有提示符本身，后面没有跟命令。用于区分「ssh 退出后本地
+       shell 已回到前台」和「屏幕上只是留着一条旧提示符 + 用户刚敲的新命令」。 */
+    function promptOnlyLine(line) {
+      if (typeof line !== 'string') return false
+      var text = line.trim()
+      if (text === '') return false
+      /* user@host:path$ / (venv) user@host:~# / root@host:/tmp% */
+      if (/^(?:\([^)]*\)\s*)*[^\s@]+@[^\s:]+(?::[^#$%❯]*)?[$#%❯]$/.test(text)) return true
+      /* RHEL 风格：[user@host ~]$ / [root@host ~]# */
+      if (/^\[[^\]]+\][$#%❯]$/.test(text)) return true
+      /* 裸提示符 $ / # / % / ❯ / > */
+      if (/^(?:\([^)]*\)\s*)?[$#%❯>]$/.test(text)) return true
+      return false
+    }
+
+    /**
+     * 屏幕兜底用的断线判定：强断线文本 + 最后一行是空提示符，两个条件
+     * 同时成立才算。只看最后 5 个非空行（提示符 + 前面 4 行），避免翻到
+     * 很久以前的旧输出；裸 `Broken pipe` 不在强信号里，远端日志正常出现
+     * 该词时不会误判。
+     */
+    function disconnectTextAtPrompt(text) {
+      if (typeof text !== 'string' || text === '') return false
+      var lines = text
+        .split('\n')
+        .map(function (line) { return line.trim() })
+        .filter(function (line) { return line !== '' })
+      if (lines.length < 2) return false
+      var last = lines[lines.length - 1]
+      var promptStart = lines.length - 1
+      if (!promptOnlyLine(last)) {
+        /* 提示符比终端宽时会折成两行：末行只剩路径尾巴，上一行是
+           user@host:path 前缀。两行合起来仍要求后面没有新命令。 */
+        if (
+          lines.length >= 3 &&
+          /^\S*[$#%❯]$/.test(last) &&
+          /^(?:\([^)]*\)\s*)*[^\s@]+@[^\s:]+(?::.*[^#$%❯])?$/.test(lines[lines.length - 2])
+        ) {
+          promptStart = lines.length - 2
+        } else {
+          return false
+        }
+      }
+      var start = Math.max(0, promptStart - 4)
+      for (var index = start; index < promptStart; index += 1) {
+        for (var pattern = 0; pattern < SSH_DISCONNECT_PROMPT_PATTERNS.length; pattern += 1) {
+          if (SSH_DISCONNECT_PROMPT_PATTERNS[pattern].test(lines[index])) return true
+        }
+      }
+      return strongAuthFailureText(lines.slice(start, promptStart).join('\n'))
+    }
+
     function looksLikeAuthFailure(tabId) {
       return authFailureText(sshTailText(tabId, 24))
     }
 
     function looksLikeSshDisconnect(tabId) {
       return disconnectText(sshTailText(tabId, 30))
+    }
+
+    /**
+     * 书签会话的屏幕兜底（500ms 节流）。OSC777 是实时信标，刷新、WebSocket
+     * 重连、标签后台、xterm 重建都会丢；丢了以后只能看屏幕尾部。
+     */
+    function checkSshTailForDisconnect(tabId, session) {
+      var current = session === undefined ? SSH_SESSIONS[tabId] : session
+      if (current === undefined || current === null) return false
+      if (current.state !== 'connected' && current.state !== 'connecting') return false
+      var now = Date.now()
+      if (current.tailCheckAt !== undefined && now - current.tailCheckAt < 500) return false
+      current.tailCheckAt = now
+      var text = sshTailText(tabId, 30)
+      if (!disconnectTextAtPrompt(text)) return false
+      /* 屏幕上能认出认证失败就按 255 记，避免自动重连把密码错重试到锁号。 */
+      markSshDisconnected(tabId, strongAuthFailureText(text) ? 255 : undefined)
+      return true
     }
 
     /**
@@ -3965,7 +4070,9 @@ window.__ModuleLoader__.load({
       session.reconnecting = false
       session.retryCount = 0
       session.retryExhausted = false
-      session.tailCheckAt = undefined
+      /* 刚敲下 ssh 时屏幕上还留着本地提示符：先跳过 500ms，等命令回显/远端
+         输出把尾部顶掉，避免拿旧提示符把新连接误判成断开。 */
+      session.tailCheckAt = Date.now()
       SSH_SESSIONS[tabId] = session
       rememberSshSession(tabId, session)
       armSshConnectTimer(tabId, session)
@@ -3992,6 +4099,9 @@ window.__ModuleLoader__.load({
           term.__twbSshBound = tabId
         }
         SSH_TERM_BY_TAB[tabId] = term
+        /* 刷新/标签重挂载后缓冲可能已经回放完毕，onWriteParsed 不会再触发：
+           这里补查一次屏幕尾部，避免胶囊一直停在「已连接」。 */
+        checkSshTailForDisconnect(tabId)
         return true
       }
       if (typeof term.parser?.registerOscHandler !== 'function') return false
@@ -4106,7 +4216,8 @@ window.__ModuleLoader__.load({
           }
         })
       }
-      /* 手输 ssh 没有 OSC777 信标：写入后看屏幕尾部，命中断线文本就翻红。
+      /* 屏幕兜底：手输 ssh 没有 OSC777 信标，书签会话的信标也会在刷新/
+         重连/标签重挂载时丢。写入后看屏幕尾部，命中断线特征就翻红。
          节流到 500ms，避免高输出时每帧扫缓冲。 */
       if (typeof term.onWriteParsed === 'function') {
         term.onWriteParsed(function () {
@@ -4123,14 +4234,20 @@ window.__ModuleLoader__.load({
             if (recovered !== '') recoverManualSshSession(tabId, recovered)
             return
           }
-          if (session.manual !== true) return
-          if (session.state !== 'connected') return
-          var now = Date.now()
-          if (session.tailCheckAt !== undefined && now - session.tailCheckAt < 500) return
-          session.tailCheckAt = now
-          if (looksLikeSshDisconnect(tabId) || looksLikeAuthFailure(tabId)) {
-            markSshDisconnected(tabId, undefined)
+          if (session.manual === true) {
+            /* 手输 ssh 没有书签信标，保留原有宽匹配（含裸 Broken pipe）。 */
+            if (session.state !== 'connected') return
+            var now = Date.now()
+            if (session.tailCheckAt !== undefined && now - session.tailCheckAt < 500) return
+            session.tailCheckAt = now
+            if (looksLikeSshDisconnect(tabId) || looksLikeAuthFailure(tabId)) {
+              markSshDisconnected(tabId, undefined)
+            }
+            return
           }
+          /* 书签会话没有 manual 标记，但同样需要屏幕兜底：信标在刷新/重连/
+             标签重挂载时会丢，屏幕上的「断线文本 + 空提示符」是最后一道保险。 */
+          checkSshTailForDisconnect(tabId, session)
         })
       }
       /* 现场恢复的同步尝试：刷新后缓冲可能已经回放完毕，onWriteParsed
@@ -4139,6 +4256,8 @@ window.__ModuleLoader__.load({
         var recoveredCommand = sshCommandFromBuffer(term, 200)
         if (recoveredCommand !== '') recoverManualSshSession(tabId, recoveredCommand)
       }
+      /* 已有会话（含刷新恢复的 connected）也先查一次。 */
+      checkSshTailForDisconnect(tabId)
       return true
     }
 
@@ -6408,7 +6527,11 @@ window.__ModuleLoader__.load({
             restoredCwd = persisted.cwd
             restoredRawCommand = persisted.rawCommand
             restoredManual = persisted.manual === true
-            restoredState = persisted.state
+            /* 老条目可能没有 state：按「已连接」恢复，交给屏幕兜底纠正。 */
+            restoredState =
+              persisted.state === 'connecting' || persisted.state === 'disconnected'
+                ? persisted.state
+                : 'connected'
             restored = true
             /* 布局恢复换了 tabId：把旧键迁到当前标签，旧条目别留着让下一个
                复用这个 id 的普通终端误继承。 */
@@ -6441,6 +6564,9 @@ window.__ModuleLoader__.load({
                 ? bookmark.rawCommand
                 : undefined,
           manual: restoredManual || bookmark.manual === true,
+          /* 新建会话刚把 ssh 命令写进 PTY：先跳过 500ms，等命令回显把旧屏幕
+             顶掉；恢复会话则立即补查（这正是假绿的修复点）。 */
+          tailCheckAt: restored ? undefined : Date.now(),
         }
         SSH_SESSIONS[tabId] = session
         rememberSshSession(tabId, session)
@@ -6559,6 +6685,8 @@ window.__ModuleLoader__.load({
         session.rc = undefined
         session.failure = undefined
         session.reconnecting = false
+        /* 旧会话的提示符/断线文本还在屏幕上：先跳过 500ms，等重连命令回显。 */
+        session.tailCheckAt = Date.now()
         armSshConnectTimer(tabId, session)
         armSshManualConnectedTimer(tabId, session)
         window.dispatchEvent(new CustomEvent('dsh-terminal-workbench:ssh-state', { detail: { tabId: tabId } }))
@@ -11400,6 +11528,9 @@ window.__ModuleLoader__.load({
       sshCommandFromTermLine: sshCommandFromTermLine,
       sshCommandFromBuffer: sshCommandFromBuffer,
       disconnectText: disconnectText,
+      disconnectTextAtPrompt: disconnectTextAtPrompt,
+      attachSshSession: attachSshSession,
+      sshSessions: SSH_SESSIONS,
       authFailureText: authFailureText,
     };
     /* 测试缝：网页标签的地址栏归一化是纯字符串逻辑。 */

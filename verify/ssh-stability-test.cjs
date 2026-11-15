@@ -405,6 +405,67 @@ check('断线文本：本地 shell 的「已终止」只在最后几行算数', 
   )
 })
 
+check('屏幕兜底：强断线文本 + 本地空提示符才判开（截图场景）', () => {
+  const text = [
+    'ubuntu@ubuntu-pc:~/Documents/deepseek-harness/项目/HY3-02-2103-2110$ ssh root@192.168.10.7',
+    'client_loop: send disconnect: Broken pipe',
+    'ubuntu@ubuntu-pc:~/Documents/deepseek-harness/项目/HY3-02-2103-2110$',
+  ].join('\n')
+  assert.strictEqual(ssh.disconnectTextAtPrompt(text), true)
+  assert.strictEqual(
+    ssh.disconnectTextAtPrompt('client_loop: send disconnect: Broken pipe\n[user@host ~]$'),
+    true,
+    'RHEL 风格提示符也要识别',
+  )
+})
+
+check('屏幕兜底：没有回到本地提示符时不判开', () => {
+  assert.strictEqual(ssh.disconnectTextAtPrompt('client_loop: send disconnect: Broken pipe'), false)
+  assert.strictEqual(
+    ssh.disconnectTextAtPrompt('client_loop: send disconnect: Broken pipe\nread() failed: Connection reset by peer'),
+    false,
+  )
+})
+
+check('屏幕兜底：裸 Broken pipe 不当作强信号', () => {
+  assert.strictEqual(ssh.disconnectTextAtPrompt('remote log: Broken pipe\nubuntu@pc:~$'), false)
+  assert.strictEqual(ssh.disconnectTextAtPrompt('Broken pipe\n$'), false)
+})
+
+check('屏幕兜底：提示符后已经敲了新命令时不判开', () => {
+  const text = [
+    'client_loop: send disconnect: Broken pipe',
+    'ubuntu@pc:~$ ssh root@192.168.10.7',
+  ].join('\n')
+  assert.strictEqual(ssh.disconnectTextAtPrompt(text), false)
+})
+
+check('屏幕兜底：断线文本超出最后 4 行不判开', () => {
+  const text = [
+    'client_loop: send disconnect: Broken pipe',
+    'line 1',
+    'line 2',
+    'line 3',
+    'line 4',
+    'ubuntu@pc:~$',
+  ].join('\n')
+  assert.strictEqual(ssh.disconnectTextAtPrompt(text), false)
+})
+
+check('屏幕兜底：提示符折行也能判开', () => {
+  const text = [
+    'client_loop: send disconnect: Broken pipe',
+    'ubuntu@pc:~/Documents/deepseek-harness/项目/HY3-02-2103-2110',
+    '-2110$',
+  ].join('\n')
+  assert.strictEqual(ssh.disconnectTextAtPrompt(text), true)
+})
+
+check('屏幕兜底：认证失败 + 本地提示符也判开', () => {
+  const text = ['Permission denied (publickey).', 'user@pc:~$'].join('\n')
+  assert.strictEqual(ssh.disconnectTextAtPrompt(text), true)
+})
+
 function fakeTerm(lines) {
   return {
     buffer: {
@@ -441,6 +502,97 @@ check('现场恢复：不把 echo / 普通输出里的 ssh 当成命令', () => 
 check('光标行读取：识别带提示符的 ssh 命令', () => {
   const term = fakeTerm(['user@pc:~$ ssh -p 2222 deploy@box'])
   assert.strictEqual(ssh.sshCommandFromTermLine(term), 'ssh -p 2222 deploy@box')
+})
+
+function fakeSshTerm(lines) {
+  const state = { lines: lines.slice(), writeParsed: undefined, handlers: {} }
+  return {
+    cols: 80,
+    rows: 24,
+    buffer: {
+      get active() {
+        return {
+          baseY: 0,
+          get cursorY() {
+            return Math.max(0, state.lines.length - 1)
+          },
+          getLine(index) {
+            const text = state.lines[index]
+            return text === undefined ? undefined : { translateToString: () => text }
+          },
+        }
+      },
+    },
+    parser: {
+      registerOscHandler(code, fn) {
+        state.handlers[code] = fn
+      },
+    },
+    onData(fn) {
+      state.dataHandler = fn
+    },
+    onWriteParsed(fn) {
+      state.writeParsed = fn
+    },
+    pushLines(...next) {
+      state.lines.push(...next)
+    },
+    fireWrite() {
+      if (state.writeParsed !== undefined) state.writeParsed()
+    },
+  }
+}
+
+check('屏幕兜底接线：恢复的 connected 书签会话在挂载时补查并判开', () => {
+  const tabId = 'tab-restored-check'
+  ssh.sshSessions[tabId] = {
+    bookmark: baseBookmark,
+    state: 'connected',
+    manual: false,
+    retryCount: 0,
+  }
+  const term = fakeSshTerm([
+    'client_loop: send disconnect: Broken pipe',
+    'ubuntu@pc:~/project$',
+  ])
+  ssh.attachSshSession(tabId, term)
+  assert.strictEqual(ssh.sshSessions[tabId].state, 'disconnected')
+  delete ssh.sshSessions[tabId]
+})
+
+check('屏幕兜底接线：书签会话的 onWriteParsed 不再被 manual 早退跳过', () => {
+  const tabId = 'tab-write-check'
+  ssh.sshSessions[tabId] = {
+    bookmark: baseBookmark,
+    state: 'connected',
+    manual: false,
+    retryCount: 0,
+  }
+  const term = fakeSshTerm([])
+  ssh.attachSshSession(tabId, term)
+  assert.strictEqual(ssh.sshSessions[tabId].state, 'connected')
+  term.pushLines('client_loop: send disconnect: Broken pipe', 'ubuntu@pc:~/project$')
+  ssh.sshSessions[tabId].tailCheckAt = undefined
+  term.fireWrite()
+  assert.strictEqual(ssh.sshSessions[tabId].state, 'disconnected')
+  delete ssh.sshSessions[tabId]
+})
+
+check('屏幕兜底接线：手输 ssh 保留裸 Broken pipe 宽匹配', () => {
+  const tabId = 'tab-manual-check'
+  ssh.sshSessions[tabId] = {
+    bookmark: baseBookmark,
+    state: 'connected',
+    manual: true,
+    retryCount: 0,
+  }
+  const term = fakeSshTerm([])
+  ssh.attachSshSession(tabId, term)
+  term.pushLines('Broken pipe')
+  ssh.sshSessions[tabId].tailCheckAt = undefined
+  term.fireWrite()
+  assert.strictEqual(ssh.sshSessions[tabId].state, 'disconnected')
+  delete ssh.sshSessions[tabId]
 })
 
 console.log(`\n== SSH 稳定性：${passed}/${passed + failures.length} 通过`)
