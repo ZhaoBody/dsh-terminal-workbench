@@ -205,6 +205,9 @@ window.__ModuleLoader__.load({
       remotes: function () { return callApi('GET', '/remotes') },
       /* 登记当前 SSH 书签的连接：宿主只放内存，面板随后就能按别名连 SFTP。 */
       connect: function (connection) { return callApi('POST', '/connect', connection) },
+      /* 注销动态登记（只影响宿主内存里的书签连接，不动 remotes.json）。
+         主要给回归测试收尾用：测试注入的假别名不能留在宿主进程里。 */
+      disconnect: function (alias) { return callApi('POST', '/disconnect', { alias: alias }) },
       list: function (path) { return callApi('GET', '/list', { path: path }) },
       read: function (path) { return callApi('GET', '/read', { path: path }) },
       write: function (path, content, version) { return callApi('POST', '/write', { path: path, content: content, version: version }) },
@@ -218,14 +221,22 @@ window.__ModuleLoader__.load({
      * 抽屉初始锚点：尽量落到 ssh 会话记到的远端 $PWD。
      *
      * 用户按面板的时机几乎总是"我刚 cd 到这儿，想看看文件"，所以能借到会话的
-     * cwd 就别从根目录开始翻。借不到再退回第一台机器的根。
+     * cwd 就别从根目录开始翻。
+     *
+     * 关键约束：当前书签的别名不在宿主清单里时，**绝不回落到清单里的第一台**。
+     * 那等于"书签没登记成功，就随便连另一台机器"——现场会看到完全无关的主机
+     * 报错（甚至误操作别人的文件）。这里返回 `missing`，由调用方明确报错。
+     * 只有会话本身没给别名时，才允许用清单第一台做手动浏览的起点。
      */
     function initialPathOf(aliases, preferred) {
-      if (aliases.length === 0) return { alias: '', path: '/' }
       if (typeof preferred === 'string' && preferred !== '') {
         var parsed = parseRemotePath(preferred)
-        if (parsed !== null && aliases.indexOf(parsed.alias) !== -1) return parsed
+        if (parsed !== null) {
+          if (aliases.indexOf(parsed.alias) !== -1) return parsed
+          return { alias: '', path: '/', missing: parsed.alias }
+        }
       }
+      if (aliases.length === 0) return { alias: '', path: '/' }
       return { alias: aliases[0], path: '/' }
     }
 
@@ -323,8 +334,23 @@ window.__ModuleLoader__.load({
             .then(function (json) {
               if (!aliveRef.current) return
               var list = Array.isArray(json.aliases) ? json.aliases : []
+              var next = initialPathOf(list, props.initialPath)
               setAliases(list)
-              setCwd(initialPathOf(list, props.initialPath))
+              if (next.alias === '' && next.missing !== undefined) {
+                /* 当前书签没登记成功：明确报错，不拿清单里的别的机器顶替。 */
+                fail(
+                  registerError !== null
+                    ? registerError
+                    : new Error(
+                        '当前书签「' +
+                          next.missing +
+                          '」没有登记到宿主' +
+                          (list.length === 0 ? '（宿主还没有任何远端）' : '（已配置：' + list.join('、') + '）'),
+                      ),
+                )
+                return
+              }
+              setCwd(next)
               if (list.length === 0 && registerError !== null) fail(registerError)
             })
             .catch(fail)
@@ -625,6 +651,16 @@ window.__ModuleLoader__.load({
           }),
         ])
 
+        /* 选择器选项：正常情况下就是宿主返回的别名。cwd.alias 为空表示
+           当前书签没登记成功（上面已报错），给一个禁用的占位项，避免
+           浏览器默认选中第一台机器，看起来像"已经连上别的机器"。 */
+        var aliasOptions = aliases.slice()
+        if (cwd.alias === '') {
+          aliasOptions.unshift('')
+        } else if (aliasOptions.indexOf(cwd.alias) === -1) {
+          aliasOptions.push(cwd.alias)
+        }
+
         return h('div', { className: 'tp-fs' }, [
           h('div', { key: 'head', className: 'tp-fs-head' }, [
             h('select', {
@@ -632,7 +668,12 @@ window.__ModuleLoader__.load({
               className: 'tp-fs-alias',
               value: cwd.alias,
               onChange: function (event) { openDir({ alias: event.target.value, path: '/' }) },
-            }, aliases.map(function (alias) { return h('option', { key: alias, value: alias }, alias) })),
+            }, aliasOptions.map(function (alias) {
+              if (alias === '') {
+                return h('option', { key: '__none', value: '', disabled: true }, text('fs.pickAlias', '选择远端…'))
+              }
+              return h('option', { key: alias, value: alias }, alias)
+            })),
             h('button', {
               key: 'u',
               type: 'button',

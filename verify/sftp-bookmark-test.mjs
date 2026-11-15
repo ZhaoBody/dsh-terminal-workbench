@@ -17,6 +17,7 @@
 import assert from 'node:assert'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import vm from 'node:vm'
 import { fileURLToPath } from 'node:url'
@@ -25,6 +26,7 @@ import {
   normalizeRemoteEntry,
   ConnectionPool,
   PATH_RE,
+  loopbackHint,
 } from '../lib/remote-fs.js'
 import { registerFsApi } from '../lib/fs-api.js'
 
@@ -75,6 +77,14 @@ test('remote: 路径语法接受 + 与中文别名', () => {
   assert.strictEqual(PATH_RE.exec('remote:a:b:/x'), null)
 })
 
+test('回环地址报错时点明“本机不是远端”', () => {
+  assert.match(loopbackHint('127.0.0.1'), /本机/)
+  assert.match(loopbackHint('localhost'), /本机/)
+  assert.match(loopbackHint('::1'), /本机/)
+  assert.strictEqual(loopbackHint('10.0.0.1'), '')
+  assert.strictEqual(loopbackHint(''), '')
+})
+
 test('连接配置默认端口 22，密码认证必须带密码', () => {
   assert.deepStrictEqual(
     normalizeRemoteEntry({ host: '10.0.0.1', username: 'root', auth: 'key', keyPath: '~/.ssh/id_rsa' }),
@@ -102,6 +112,26 @@ test('连接池登记后 aliases/entryOf 立即可见', () => {
   assert.strictEqual(pool.entryOf('不存在'), undefined)
   pool.dispose()
   assert.deepStrictEqual(pool.aliases(), [])
+})
+
+test('注销动态登记只删内存表，remotes.json 的同名配置保留', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'twb-unregister-'))
+  const file = path.join(dir, 'remotes.json')
+  fs.writeFileSync(
+    file,
+    JSON.stringify({ fixed: { host: '10.0.0.9', username: 'root', auth: 'key', keyPath: '~/.ssh/id_rsa' } }),
+  )
+  const pool = new ConnectionPool(file)
+  pool.register('box', { host: '10.0.0.1', username: 'root', auth: 'key', keyPath: '~/.ssh/id_rsa' })
+  assert.deepStrictEqual(pool.aliases().sort(), ['box', 'fixed'])
+  assert.strictEqual(pool.unregister('box'), true)
+  assert.strictEqual(pool.entryOf('box'), undefined)
+  assert.strictEqual(pool.unregister('box'), false, '重复注销应返回 false')
+  /* remotes.json 里的别名不能被 disconnect 删掉：注销只针对动态登记。 */
+  assert.strictEqual(pool.unregister('fixed'), false)
+  assert.ok(pool.aliases().includes('fixed'))
+  pool.dispose()
+  fs.rmSync(dir, { recursive: true, force: true })
 })
 
 test('同名书签重新登记会换掉旧连接配置', () => {
@@ -255,6 +285,10 @@ function makeRemoteFs() {
       dynamic.set(name, normalizeRemoteEntry(entry))
       return name
     },
+    unregisterRemote(alias) {
+      calls.push(['unregisterRemote', alias])
+      return dynamic.delete(normalizeRemoteAlias(alias))
+    },
     backendOf(alias) {
       calls.push(['backendOf', alias])
       return backend
@@ -357,6 +391,27 @@ async function asyncTests() {
     assert.strictEqual(result.body.path, '/etc')
     assert.strictEqual(result.body.entries[0].name, 'a.txt')
     assert.ok(fake.calls.some((item) => item[0] === 'backendOf' && item[1] === alias))
+  })
+
+  await testAsync('POST /disconnect 注销动态登记，响应不回传密码', async () => {
+    const fake = makeRemoteFs()
+    const { routes } = makeServer(fake)
+    const alias = 'HY3-295-299+2100-2102'
+    await call(routes.get(`${PREFIX}/connect`), 'POST', `${PREFIX}/connect`, {
+      alias,
+      host: '127.0.0.1',
+      username: 'root',
+      auth: 'password',
+      password: 'secret',
+    })
+    const removed = await call(routes.get(`${PREFIX}/disconnect`), 'POST', `${PREFIX}/disconnect`, { alias })
+    assert.strictEqual(removed.status, 200)
+    assert.deepStrictEqual(removed.body, { ok: true, alias, removed: true })
+    assert.strictEqual(JSON.stringify(removed.body).includes('secret'), false)
+    const remotes = await call(routes.get(`${PREFIX}/remotes`), 'GET', `${PREFIX}/remotes`)
+    assert.deepStrictEqual(remotes.body.aliases, [])
+    const again = await call(routes.get(`${PREFIX}/disconnect`), 'POST', `${PREFIX}/disconnect`, { alias })
+    assert.strictEqual(again.body.removed, false, '重复注销应返回 removed:false')
   })
 
   await testAsync('POST /connect 缺 host 返回 400', async () => {

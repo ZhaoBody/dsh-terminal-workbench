@@ -211,11 +211,18 @@ async function main() {
   await test('删除始终要求确认', () => {
     assert.strictEqual(panel.needsConfirmBeforeRemove(), true)
   })
-  await test('initialPathOf 优先用会话 cwd，否则第一台机器的根', () => {
+  await test('initialPathOf 优先用会话 cwd；书签别名未登记时不回落到别的机器', () => {
     assert.deepStrictEqual(panel.initialPathOf(['boxa', 'boxb'], 'remote:boxb:/srv'), { alias: 'boxb', path: '/srv' })
-    assert.deepStrictEqual(panel.initialPathOf(['boxa', 'boxb'], 'remote:gone:/srv'), { alias: 'boxa', path: '/' })
+    /* 关键回归：当前书签没登记成功时返回 missing，绝不能拿 boxa 顶替。
+       现场症状是"书签是 A 车，面板却连到 B 车（甚至 127.0.0.1）"。 */
+    assert.deepStrictEqual(panel.initialPathOf(['boxa', 'boxb'], 'remote:gone:/srv'), { alias: '', path: '/', missing: 'gone' })
     assert.deepStrictEqual(panel.initialPathOf(['boxa'], ''), { alias: 'boxa', path: '/' })
-    assert.deepStrictEqual(panel.initialPathOf([], 'remote:boxa:/srv'), { alias: '', path: '/' })
+    assert.deepStrictEqual(panel.initialPathOf([], 'remote:boxa:/srv'), { alias: '', path: '/', missing: 'boxa' })
+    assert.deepStrictEqual(panel.initialPathOf([], ''), { alias: '', path: '/' })
+  })
+  await test('fsApi 暴露 connect / disconnect', () => {
+    assert.strictEqual(typeof panel.fsApi.connect, 'function')
+    assert.strictEqual(typeof panel.fsApi.disconnect, 'function')
   })
 
   if (!RUN_E2E) {
