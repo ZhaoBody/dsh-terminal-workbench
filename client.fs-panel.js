@@ -196,7 +196,10 @@ window.__ModuleLoader__.load({
            下一步动作（前者"刷新一下"，后者"检查网络/权限"）。 */
         var suffix = json === null || json === undefined || json.code === undefined ? '' : '（' + json.code + '）'
         var message = json === null || json === undefined ? '未知错误' : json.error === undefined ? '未知错误' : json.error
-        throw new Error(message + suffix)
+        var error = new Error(message + suffix)
+        /* 带上 code：上传遇到 FS_EXISTS 要弹覆盖确认，不能靠解析中文文案。 */
+        error.code = json === null || json === undefined ? undefined : json.code
+        throw error
       }
       return json
     }
@@ -215,6 +218,40 @@ window.__ModuleLoader__.load({
       move: function (from, to) { return callApi('POST', '/move', { from: from, to: to }) },
       copy: function (from, to) { return callApi('POST', '/copy', { from: from, to: to }) },
       remove: function (path, recursive) { return callApi('POST', '/remove', { path: path, recursive: recursive, confirm: true }) },
+      /* 上传走原始二进制体：文件不经过 JSON/base64，内存占用与文件大小无关。 */
+      upload: function (dir, file, overwrite) {
+        var url =
+          '/__dsh-terminal-workbench/fs/upload?path=' +
+          encodeURIComponent(dir) +
+          '&name=' +
+          encodeURIComponent(file.name) +
+          (overwrite === true ? '&overwrite=1' : '')
+        return fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/octet-stream' },
+          body: file,
+        }).then(function (response) {
+          return response.json().then(function (json) {
+            if (json === null || json === undefined || json.ok !== true) {
+              var suffix = json === null || json === undefined || json.code === undefined ? '' : '（' + json.code + '）'
+              var message =
+                json === null || json === undefined
+                  ? '上传失败（HTTP ' + response.status + '）'
+                  : json.error === undefined
+                    ? '上传失败（HTTP ' + response.status + '）'
+                    : json.error
+              var error = new Error(message + suffix)
+              error.code = json === null || json === undefined ? undefined : json.code
+              throw error
+            }
+            return json
+          })
+        })
+      },
+      /* 下载直接用浏览器导航：由宿主流式回传，前端不把整文件读进内存。 */
+      downloadUrl: function (path) {
+        return '/__dsh-terminal-workbench/fs/download?path=' + encodeURIComponent(path)
+      },
     }
 
     /**
@@ -263,6 +300,10 @@ window.__ModuleLoader__.load({
         var selectedState = react.useState('')
         var editorState = react.useState(null)
         var busyState = react.useState(false)
+        /* 上传进度：{ name, index, total }；null 表示空闲。 */
+        var uploadingState = react.useState(null)
+        /* 隐藏的 <input type=file>：点「上传」按钮时由代码触发。 */
+        var uploadRef = react.useRef(null)
 
         var aliases = aliasesState[0]
         var setAliases = aliasesState[1]
@@ -282,6 +323,8 @@ window.__ModuleLoader__.load({
         var setEditor = editorState[1]
         var busy = busyState[0]
         var setBusy = busyState[1]
+        var uploading = uploadingState[0]
+        var setUploading = uploadingState[1]
 
         /* 组件卸载后不能再 setState（React 会警告，且可能写入已销毁的树）。
            用 ref 做闸门，所有异步回调先看它。 */
@@ -539,6 +582,91 @@ window.__ModuleLoader__.load({
             })
         }
 
+        /* ---------- 下载 ---------- */
+        var downloadEntry = function (entry) {
+          if (entry.type !== 'file') return
+          var target = makeRemotePath(cwd.alias, joinRemotePath(cwd.path, entry.name))
+          var link = document.createElement('a')
+          link.href = fsApi.downloadUrl(target)
+          link.download = entry.name
+          link.style.display = 'none'
+          document.body.appendChild(link)
+          link.click()
+          link.remove()
+        }
+
+        /* ---------- 上传 ----------
+           逐个文件串行传：并行上传会让进度条和错误归属都变乱。
+           同名先按当前清单确认再传；清单之外的同名文件由宿主 409 兜底。 */
+        var uploadFiles = function (files) {
+          if (files.length === 0) return
+          var dir = makeRemotePath(cwd.alias, cwd.path)
+          var index = 0
+          var run = function () {
+            if (!aliveRef.current) return
+            if (index >= files.length) {
+              setUploading(null)
+              setBusy(false)
+              refresh()
+              return
+            }
+            var file = files[index]
+            setUploading({ name: file.name, index: index + 1, total: files.length })
+            /* 先按当前目录清单预判同名：确认后再传，避免整份文件传完才收到
+               409、用户点“覆盖”又从头传一遍。清单被截断或期间新增同名文件时，
+               下面的 409 兜底仍然有效。 */
+            var exists = entries.some(function (entry) {
+              return entry.type === 'file' && entry.name === file.name
+            })
+            if (exists) {
+              var ok = window.confirm(
+                text('fs.confirmOverwrite', '远端已存在同名文件，覆盖？') + '\n' + file.name,
+              )
+              if (!ok) {
+                index += 1
+                run()
+                return
+              }
+            }
+            var send = function (overwrite) {
+              return fsApi.upload(dir, file, overwrite).catch(function (err) {
+                if (err && err.code === 'FS_EXISTS') {
+                  var retry = window.confirm(
+                    text('fs.confirmOverwrite', '远端已存在同名文件，覆盖？') + '\n' + file.name,
+                  )
+                  if (retry) return fsApi.upload(dir, file, true)
+                  return undefined
+                }
+                throw err
+              })
+            }
+            send(exists)
+              .then(function () {
+                index += 1
+                run()
+              })
+              .catch(function (err) {
+                if (!aliveRef.current) return
+                setUploading(null)
+                setBusy(false)
+                fail(err)
+              })
+          }
+          setBusy(true)
+          run()
+        }
+
+        var pickUpload = function () {
+          if (uploadRef.current !== null && typeof uploadRef.current.click === 'function') uploadRef.current.click()
+        }
+
+        var onUploadChange = function (event) {
+          var files = Array.prototype.slice.call(event.target.files || [])
+          /* 清空 value：同一个文件改完再传一次也能触发 change。 */
+          event.target.value = ''
+          uploadFiles(files)
+        }
+
         /* ---------- 渲染 ---------- */
         if (aliases.length === 0 && error === '') {
           return h('div', { className: 'tp-fs' },
@@ -586,6 +714,15 @@ window.__ModuleLoader__.load({
             h('span', { key: 'n', className: 'tp-fs-name' }, entry.name),
             h('span', { key: 's', className: 'tp-fs-size' }, entry.type === 'file' ? formatSize(entry.size) : ''),
             h('span', { key: 'o', className: 'tp-fs-ops' }, [
+              entry.type === 'file'
+                ? h('button', {
+                    key: 'dl',
+                    type: 'button',
+                    className: 'tp-fs-op',
+                    title: text('fs.download', '下载'),
+                    onClick: function (event) { event.stopPropagation(); downloadEntry(entry) },
+                  }, '↓')
+                : null,
               h('button', {
                 key: 'r',
                 type: 'button',
@@ -662,6 +799,14 @@ window.__ModuleLoader__.load({
         }
 
         return h('div', { className: 'tp-fs' }, [
+          h('input', {
+            key: 'upload-input',
+            ref: uploadRef,
+            type: 'file',
+            multiple: true,
+            style: { display: 'none' },
+            onChange: onUploadChange,
+          }),
           h('div', { key: 'head', className: 'tp-fs-head' }, [
             h('select', {
               key: 'a',
@@ -696,8 +841,30 @@ window.__ModuleLoader__.load({
               title: text('fs.newFolder', '新建目录'),
               onClick: makeDir,
             }, '＋'),
+            h('button', {
+              key: 'up',
+              type: 'button',
+              className: 'tp-fs-btn',
+              title: text('fs.upload', '上传文件'),
+              disabled: busy || uploading !== null || cwd.alias === '',
+              onClick: pickUpload,
+            }, '⇪'),
           ]),
           h('div', { key: 'path', className: 'tp-fs-path' }, crumbs),
+          uploading === null
+            ? null
+            : h(
+                'div',
+                { key: 'uploading', className: 'tp-fs-note' },
+                text('fs.uploading', '上传中') +
+                  ' ' +
+                  uploading.name +
+                  '（' +
+                  uploading.index +
+                  '/' +
+                  uploading.total +
+                  '）',
+              ),
           error === '' ? null : h('div', { key: 'err', className: 'tp-fs-error' }, [
             h('span', { key: 't' }, error),
             h('button', {

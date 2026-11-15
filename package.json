@@ -1,6 +1,6 @@
 {
   "name": "dsh-terminal-workbench",
-  "version": "0.13.16",
+  "version": "0.13.17",
   "description": "DSH 终端工作台：三栏布局 + 自绘 xterm 渲染，单插件实现（替代 ui-layout 与 ui-sidebar-terminal）。",
   "keywords": [
     "dsh",

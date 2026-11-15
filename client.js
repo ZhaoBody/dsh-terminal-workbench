@@ -662,7 +662,7 @@ window.__ModuleLoader__.load({
     var CAMERA_CACHE = null
     /* 构建版本戳：自测用它判断浏览器加载的是否为磁盘上的最新构建。
        每次实质性改动手动 bump，避免拿旧产物当证据。 */
-    var BUILD_STAMP = '2026-11-15.05'
+    var BUILD_STAMP = '2026-11-15.06'
     var FILES_COLLAPSED_KEY = 'dsh-terminal-workbench.fileRowCollapsed'
 
     function readFilesCollapsed() {
@@ -8917,6 +8917,11 @@ window.__ModuleLoader__.load({
               'fs.confirmWarn': '远端没有回收站，删除后无法恢复。',
               'fs.save': '保存',
               'fs.cancel': '取消',
+              'fs.upload': '上传文件',
+              'fs.uploading': '上传中',
+              'fs.download': '下载',
+              'fs.confirmOverwrite': '远端已存在同名文件，覆盖？',
+              'fs.pickAlias': '选择远端…',
               'fs.truncated': '条目过多，只显示前 2000 个',
             },
             en: {
@@ -8982,6 +8987,11 @@ window.__ModuleLoader__.load({
               'fs.confirmWarn': 'There is no recycle bin on the remote — this cannot be undone.',
               'fs.save': 'Save',
               'fs.cancel': 'Cancel',
+              'fs.upload': 'Upload file',
+              'fs.uploading': 'Uploading',
+              'fs.download': 'Download',
+              'fs.confirmOverwrite': 'A file with the same name already exists on the remote. Overwrite?',
+              'fs.pickAlias': 'Choose a remote…',
               'fs.truncated': 'Too many entries — showing the first 2000',
             },
           }),

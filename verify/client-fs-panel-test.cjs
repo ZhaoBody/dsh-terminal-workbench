@@ -224,6 +224,64 @@ async function main() {
     assert.strictEqual(typeof panel.fsApi.connect, 'function')
     assert.strictEqual(typeof panel.fsApi.disconnect, 'function')
   })
+  await test('fsApi 暴露 upload / downloadUrl', () => {
+    assert.strictEqual(typeof panel.fsApi.upload, 'function')
+    assert.strictEqual(typeof panel.fsApi.downloadUrl, 'function')
+  })
+  await test('downloadUrl 编码中文/空格，不把 # ? & 当语法', () => {
+    const url = panel.fsApi.downloadUrl('remote:车 A:/tmp/日志 1#2&3.txt')
+    assert.ok(url.startsWith('/__dsh-terminal-workbench/fs/download?path='))
+    /* 整段路径必须只出现一次编码后的形态；原始 # ? & 一个都不能漏出去。 */
+    assert.ok(!/[#&]/.test(url), `URL 里出现了未编码的保留字符：${url}`)
+    assert.ok(url.includes(encodeURIComponent('remote:车 A:/tmp/日志 1#2&3.txt')))
+  })
+  await test('upload 走原始二进制体，文件名编码，FS_EXISTS 带 code', async () => {
+    const calls = []
+    const origFetch = global.fetch
+    const file = { name: '日志 1.txt', size: 3 }
+    try {
+      global.fetch = async (url, init) => {
+        calls.push({ url, init })
+        return {
+          status: 409,
+          json: async () => ({ ok: false, error: '远端文件已存在', code: 'FS_EXISTS' }),
+        }
+      }
+      let caught = null
+      try {
+        await panel.fsApi.upload('remote:车 A:/tmp', file, false)
+      } catch (error) {
+        caught = error
+      }
+      assert.notStrictEqual(caught, null, 'FS_EXISTS 必须抛错')
+      assert.strictEqual(caught.code, 'FS_EXISTS', '前端要能按 code 弹覆盖确认，不能解析中文')
+      assert.strictEqual(calls.length, 1)
+      const url = calls[0].url
+      assert.ok(url.includes('path=' + encodeURIComponent('remote:车 A:/tmp')))
+      assert.ok(url.includes('name=' + encodeURIComponent('日志 1.txt')))
+      assert.ok(!url.includes('overwrite=1'), '默认不带 overwrite')
+      assert.strictEqual(calls[0].init.method, 'POST')
+      assert.strictEqual(calls[0].init.body, file, '文件对象原样作为 body，不经 JSON/base64')
+      assert.strictEqual(calls[0].init.headers['content-type'], 'application/octet-stream')
+    } finally {
+      global.fetch = origFetch
+    }
+  })
+  await test('upload overwrite=true 追加 overwrite=1', async () => {
+    const calls = []
+    const origFetch = global.fetch
+    try {
+      global.fetch = async (url, init) => {
+        calls.push({ url, init })
+        return { status: 200, json: async () => ({ ok: true, name: 'a.txt' }) }
+      }
+      const out = await panel.fsApi.upload('remote:boxa:/tmp', { name: 'a.txt' }, true)
+      assert.strictEqual(out.ok, true)
+      assert.ok(calls[0].url.includes('overwrite=1'))
+    } finally {
+      global.fetch = origFetch
+    }
+  })
 
   if (!RUN_E2E) {
     console.log('\n[3] HTTP 契约：跳过（需要 127.0.0.1:2222 上的测试 sshd；设置 TWB_E2E=1 启用）')
