@@ -96,6 +96,14 @@
   切成 `0px minmax(0px, 1fr) 0px`：左右列归零并隐藏，终端列吃满视口，相机浮层和
   两根拖拽把手一并收起；宿主面板原本写死的 `100vw` 改成贴合列宽的 `100%`，
   不再横向溢出。再点一次「退出全屏」即可回到原来的三栏宽度。
+- **文件面板跟随 SSH 书签 + 空白页修复**（v0.13.14）：文件面板过去只认
+  `.dsh-terminal-workbench/remotes.json`，现场没这份清单就永远「远端未配置」。
+  现在打开面板时把当前 SSH 书签的 host/port/username/auth/password 经
+  `POST /fs/connect` 登记给宿主，密码只走请求体、宿主只放内存、不落盘不进日志；
+  别名直接用书签名（中文、`+`、空格都支持），`remotes.json` 显式配置仍然优先。
+  同时修掉面板 chunk 文件名不合规导致的整块空白：宿主只接受
+  `client.<name>.js`，旧名 `client-fs-panel.js` 会让 `require.async` 抛错，
+  连终端渲染树一起崩掉；现在改名为 `client.fs-panel.js` 并加了装载契约回归。
 - **展现方式**：适应 / 铺满切换、双击画面或按钮全屏（原生全屏不可用时自动退到窗口内全屏）、保存当前画面、
   分辨率与播放模式角标、暂停 / 重连；适应 / 铺满按相机书签记住。
 - 口令只在建立会话的请求体里，会话 id 随机、内存态、30 分钟 TTL，
@@ -415,7 +423,7 @@ dsh plugin --profile <profile> add "file:$(pwd)/dsh-terminal-workbench-<version>
 ├── locale/                 # 中英文文案
 ├── client.js               # 浏览器半侧入口
 ├── client.terminal.js      # xterm 渲染 chunk（构建产物）
-├── client-fs-panel.js      # 文件面板 chunk（按需加载）
+├── client.fs-panel.js      # 文件面板 chunk（按需加载）
 ├── build.mjs               # esbuild 构建脚本
 ├── cordis.patch.yml        # DSH bundle 补丁
 ├── icon.svg                # 插件图标
@@ -445,7 +453,7 @@ dsh plugin --profile <profile> add "file:$(pwd)/dsh-terminal-workbench-<version>
 | `src/terminal.js` | xterm 渲染源码（构建入口） |
 | `build.mjs` | esbuild 构建脚本：产物 + `client.js` 缓存标记 |
 | `client.terminal.js` | xterm 渲染 chunk（构建产物，勿手改） |
-| `client-fs-panel.js` | 文件面板 chunk（按需下载） |
+| `client.fs-panel.js` | 文件面板 chunk（按需下载） |
 
 回归入口只有一条：
 
@@ -453,7 +461,7 @@ dsh plugin --profile <profile> add "file:$(pwd)/dsh-terminal-workbench-<version>
 npm test          # 等价于 node verify/run-all.mjs
 ```
 
-当前基线：**语法 14/14，测试 25 个文件 / 433 项全绿**。
+当前基线：**语法 14/14，测试 26 个文件 / 450 项全绿**。
 
 | 测试 | 项数 | 覆盖 |
 |---|---:|---|
@@ -466,7 +474,7 @@ npm test          # 等价于 node verify/run-all.mjs
 | `camera-api-test.mjs` | 40 | 相机代理会话、RTSP 地址编码、品牌路径探测与自动纠正、H.265→H.264 编码探测与自动切换、同连接 Digest 认证、go2rtc 流复用/引用计数、tmpfs 临时目录、播放器缓存与 gzip、低延迟缓冲、Digest/Basic、MJPEG/快照、错误路径 |
 | `camera-ws-proxy-test.mjs` | 6 | 同源 WebSocket 代理：Upgrade 透传、Origin 拒绝、非法流名、go2rtc 未运行、registerUpgrade 精确路径、旧 webServer 跳过 |
 | `client-blocks-test.cjs` | 15 | 前端命令块解析与跳转 |
-| `client-fs-panel-test.cjs` | 15 | 面板纯函数；SSH 契约需 `TWB_E2E=1` |
+| `client-fs-panel-test.cjs` | 17 | chunk 装载契约、面板纯函数；SSH 契约需 `TWB_E2E=1` |
 | `client-p1-test.cjs` | 11 | IPv6 转发解析、askpass 并发隔离 |
 | `client-terminal-access-test.cjs` | 10 | 访问角标映射、终端身份解析、快照隔离、无授权/撤销入口 |
 | `forward-parse-test.mjs` | 31 | 转发规格、跳板链、管理器边界 |
@@ -475,6 +483,7 @@ npm test          # 等价于 node verify/run-all.mjs
 | `host-tools-contract-test.mjs` | 20 | 宿主工具注册、参数路由、审批分支 |
 | `remote-fs-path-test.mjs` | 16 | 远端 POSIX 路径归一化 |
 | `rescue-patch-test.mjs` | 11 | 启动自救补丁改写：只启用 ui-layout、必须禁用本插件 |
+| `sftp-bookmark-test.mjs` | 15 | 书签名当别名（中文/`+`/空格）、`/fs/connect` 登记、密码不回传、面板接线 |
 | `ssh-stability-test.cjs` | 40 | 保活参数、自动重连退避、认证失败不重试、书签指纹、相机前缀持久化、刷新后标题回退到书签名、tabId 重分配后按稳定内容地址恢复、手输 ssh 解析与 rawCommand 重连、断线文本识别、屏幕兜底（强断线 + 空提示符 / 折行提示符 / 裸 Broken pipe 与旧输出不误判）、恢复/onWriteParsed 接线 |
 | `terminal-access-api-test.mjs` | 9 | 访问快照、ask/never、只读 405、旧参数兼容 |
 | `terminal-build-test.cjs` | 9 | 构建源/产物/`chunk-rev` 一致性与终端关键能力 |

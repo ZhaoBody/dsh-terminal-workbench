@@ -662,7 +662,7 @@ window.__ModuleLoader__.load({
     var CAMERA_CACHE = null
     /* 构建版本戳：自测用它判断浏览器加载的是否为磁盘上的最新构建。
        每次实质性改动手动 bump，避免拿旧产物当证据。 */
-    var BUILD_STAMP = '2026-11-15.02'
+    var BUILD_STAMP = '2026-11-15.03'
     var FILES_COLLAPSED_KEY = 'dsh-terminal-workbench.fileRowCollapsed'
 
     function readFilesCollapsed() {
@@ -1801,13 +1801,13 @@ window.__ModuleLoader__.load({
     function FsPanelDrawer(props) {
       var Panel = react.useMemo(function () {
         return react.lazy(async function () {
-          var mod = await require.async('./client-fs-panel.js')
+          var mod = await require.async('./client.fs-panel.js')
           return { default: mod.createFsPanel({ react: react, t: props.t }) }
         })
       }, [])
       return jsx(react.Suspense, {
         fallback: jsx('div', { className: 'tp-fs', children: jsx('div', { className: 'tp-fs-empty', children: '载入文件面板…' }) }),
-        children: jsx(Panel, { initialPath: props.initialPath }),
+        children: jsx(Panel, { initialPath: props.initialPath, connection: props.connection }),
       })
     }
 
@@ -2744,6 +2744,23 @@ window.__ModuleLoader__.load({
       return list.filter(function (item) {
         return groupIdOf(item) === groupId
       })
+    }
+
+    /**
+     * SSH 书签 → 文件面板的远端别名。
+     *
+     * 书签名直接当别名最直观（面板选择器里显示的就是用户起的名字），
+     * 但 `remote:别名:/路径` 的语法容不下 `:` 和 `/`；这类书签退回用 id，
+     * 再不行用 `user@host`。宿主侧会按同一个别名登记连接。
+     */
+    function sshRemoteAlias(bookmark) {
+      if (bookmark === null || bookmark === undefined || typeof bookmark !== 'object') return ''
+      var name = String(bookmark.name ?? '').trim()
+      if (name !== '' && name.indexOf(':') === -1 && name.indexOf('/') === -1) return name
+      var id = String(bookmark.id ?? '').trim()
+      if (id !== '' && id.indexOf(':') === -1 && id.indexOf('/') === -1) return id
+      var fallback = String(bookmark.user ?? '').trim() + '@' + String(bookmark.host ?? '').trim()
+      return fallback === '@' ? '' : fallback
     }
 
     /* ---------- 书签文件（bookmarks.json） ----------
@@ -6868,12 +6885,27 @@ window.__ModuleLoader__.load({
       var setFsOpen = fsOpenState[1]
       /* 打开面板时的锚点：优先 ssh 会话的 cwd（远端 $PWD），
          用 remote:别名: 前缀让面板直接落到那台机器那个目录。
-         别名取书签名——设置里的远端清单也是按名字建的，同名才连得上。 */
+         别名取书签名（含 +/中文都可以），宿主按同一个别名登记连接。 */
+      var fsAlias = ssh === undefined ? '' : sshRemoteAlias(ssh.bookmark)
       var fsInitialPath = ''
-      if (ssh !== undefined && typeof ssh.bookmark?.name === 'string' && ssh.bookmark.name !== '') {
+      if (fsAlias !== '') {
         var fsDir = typeof ssh.cwd === 'string' && ssh.cwd !== '' ? ssh.cwd : '/'
-        fsInitialPath = 'remote:' + ssh.bookmark.name + ':' + fsDir
+        fsInitialPath = 'remote:' + fsAlias + ':' + fsDir
       }
+      /* 把当前书签的连接配置交给宿主登记：密码只在请求体里过一次，
+         宿主只放内存，不写盘、不进日志。 */
+      var fsConnection =
+        fsAlias === ''
+          ? null
+          : {
+              alias: fsAlias,
+              host: ssh.bookmark.host,
+              port: ssh.bookmark.port,
+              username: ssh.bookmark.user,
+              auth: ssh.bookmark.auth,
+              password: ssh.bookmark.password,
+              keyPath: ssh.bookmark.keyPath,
+            }
       var fsToggle =
         ssh === undefined
           ? null
@@ -6901,7 +6933,11 @@ window.__ModuleLoader__.load({
           }),
           fsToggle,
           fsOpen
-            ? jsx(FsPanelDrawer, { t: t, initialPath: fsInitialPath })
+            ? jsx(FsPanelDrawer, {
+                t: t,
+                initialPath: fsInitialPath,
+                connection: fsConnection,
+              })
             : null,
           /* 块头：边距点击/快捷键跳转后出现，显示命令、耗时与退出码。
              不做"折叠输出"：那需要改 xterm 的行渲染，和 S4 的取舍冲突。 */
@@ -11585,6 +11621,7 @@ window.__ModuleLoader__.load({
       sshCommandFromBuffer: sshCommandFromBuffer,
       disconnectText: disconnectText,
       disconnectTextAtPrompt: disconnectTextAtPrompt,
+      sshRemoteAlias: sshRemoteAlias,
       attachSshSession: attachSshSession,
       sshSessions: SSH_SESSIONS,
       authFailureText: authFailureText,

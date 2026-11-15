@@ -17,7 +17,7 @@ const root = path.join(here, '..')
 
 const syntaxTargets = [
   'client.js',
-  'client-fs-panel.js',
+  'client.fs-panel.js',
   'client.terminal.js',
   ...fs.readdirSync(path.join(root, 'lib')).filter((name) => name.endsWith('.js')).map((name) => path.join('lib', name)),
 ]

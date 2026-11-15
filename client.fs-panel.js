@@ -3,7 +3,7 @@
    用户没打开文件面板就不会下载它。 */
 window.__ModuleLoader__.load({
   id: "dsh-terminal-workbench",
-  chunk: "client-fs-panel.js",
+  chunk: "client.fs-panel.js",
   factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;
@@ -40,7 +40,8 @@ window.__ModuleLoader__.load({
      */
     function parseRemotePath(raw) {
       if (typeof raw !== 'string') return null
-      var match = /^remote:([A-Za-z0-9_.-]+):(\/.*)$/.exec(raw)
+      /* 别名允许中文、`+`、空格等书签名常见字符，只排除 `:` 与 `/`。 */
+      var match = /^remote:([^:/]+):(\/.*)$/.exec(raw)
       if (match === null) return null
       return { alias: match[1], path: match[2] }
     }
@@ -202,6 +203,8 @@ window.__ModuleLoader__.load({
 
     var fsApi = {
       remotes: function () { return callApi('GET', '/remotes') },
+      /* 登记当前 SSH 书签的连接：宿主只放内存，面板随后就能按别名连 SFTP。 */
+      connect: function (connection) { return callApi('POST', '/connect', connection) },
       list: function (path) { return callApi('GET', '/list', { path: path }) },
       read: function (path) { return callApi('GET', '/read', { path: path }) },
       write: function (path, content, version) { return callApi('POST', '/write', { path: path, content: content, version: version }) },
@@ -290,18 +293,42 @@ window.__ModuleLoader__.load({
           return typeof value === 'string' && value !== '' && value !== key ? value : fallback
         }
 
-        /* ---------- 载入远端清单（只做一次） ---------- */
+        /* ---------- 登记书签连接 + 载入远端清单 ----------
+           文件面板不再要求用户手写 remotes.json：把当前 SSH 书签的连接
+           交给宿主登记（只在内存），随后按书签名当别名直接连 SFTP。
+           登记失败不立刻报错——如果 remotes.json 里已有同名配置，仍可用。 */
+        var connection = props.connection
+        var connectionKey =
+          connection === undefined || connection === null
+            ? ''
+            : [
+                connection.alias,
+                connection.host,
+                connection.port,
+                connection.username,
+                connection.auth,
+                connection.password,
+                connection.keyPath,
+              ].join('\u0000')
         react.useEffect(function () {
-          fsApi
-            .remotes()
+          var registerError = null
+          var registered =
+            connectionKey === ''
+              ? Promise.resolve()
+              : fsApi.connect(connection).catch(function (error) {
+                  registerError = error
+                })
+          registered
+            .then(function () { return fsApi.remotes() })
             .then(function (json) {
               if (!aliveRef.current) return
               var list = Array.isArray(json.aliases) ? json.aliases : []
               setAliases(list)
               setCwd(initialPathOf(list, props.initialPath))
+              if (list.length === 0 && registerError !== null) fail(registerError)
             })
             .catch(fail)
-        }, [])
+        }, [connectionKey])
 
         /** 载入某个目录的条目。cwd 为空表示还没定锚，什么都不做。 */
         var loadDir = react.useCallback(function (nextCwd) {
@@ -489,7 +516,7 @@ window.__ModuleLoader__.load({
         /* ---------- 渲染 ---------- */
         if (aliases.length === 0 && error === '') {
           return h('div', { className: 'tp-fs' },
-            h('div', { className: 'tp-fs-empty' }, text('fs.noRemotes', '还没有配置远端：先在设置里添加一台机器')))
+            h('div', { className: 'tp-fs-empty' }, text('fs.noRemotes', '还没有可用的远端：用 SSH 书签打开终端后，面板会自动使用该书签的连接')))
         }
 
         /* 面包屑：每段都能点。分段时保留绝对路径语义，点第 n 段就到第 n 层。 */

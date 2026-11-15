@@ -7,7 +7,7 @@
  *   [2] HTTP 契约 —— 用真 server 起 fs-api，再用面板自己的 fsApi 客户端打通，
  *       确认前端发出的请求形状和宿主期望的一致（含删除的 confirm 必须由客户端补）。
  *
- * client-fs-panel.js 是 __ModuleLoader__ 包装的 chunk，用假 window 捕获 factory
+ * client.fs-panel.js 是 __ModuleLoader__ 包装的 chunk，用假 window 捕获 factory
  * 后按 (require) 求值即可拿到导出——与浏览器里的加载方式一致。
  */
 const assert = require('node:assert')
@@ -16,7 +16,7 @@ const http = require('node:http')
 const path = require('node:path')
 const os = require('node:os')
 
-const PANEL = path.join(__dirname, '..', 'client-fs-panel.js')
+const PANEL = path.join(__dirname, '..', 'client.fs-panel.js')
 const FS_API = path.join(__dirname, '..', 'lib', 'fs-api.js')
 const FS_LIB = path.join(__dirname, '..', 'lib', 'remote-fs.js')
 
@@ -48,7 +48,7 @@ function loadPanel() {
   new Function('window', src)(fakeWindow)
   if (captured === null) throw new Error('chunk 没有调用 __ModuleLoader__.load')
   assert.strictEqual(captured.id, 'dsh-terminal-workbench')
-  assert.strictEqual(captured.chunk, 'client-fs-panel.js')
+  assert.strictEqual(captured.chunk, 'client.fs-panel.js')
   return captured.factory(() => ({}))
 }
 
@@ -90,6 +90,23 @@ function request(port, method, pathName, body) {
 
 async function main() {
   const panel = loadPanel()
+
+  console.log('\n[0] chunk 装载契约')
+  await test('chunk 文件名符合宿主的 client.<name>.js 规则', () => {
+    /* 宿主 dsh-client-modules 只接受 ^client\.[A-Za-z0-9][A-Za-z0-9._-]*\.js$。
+       文件名不合规时 require.async 直接抛 "invalid relative chunk request"，
+       面板打不开还会把整个 slot 渲染树打崩（现场表现为一片空白）。 */
+    const rule = /^client\.[A-Za-z0-9][A-Za-z0-9._-]*\.js$/
+    assert.ok(rule.test(path.basename(PANEL)), `chunk 文件名不合规：${path.basename(PANEL)}`)
+    assert.ok(fs.existsSync(PANEL), `chunk 文件不存在：${PANEL}`)
+  })
+  await test('client.js 用同名相对路径按需加载', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'client.js'), 'utf8')
+    assert.ok(
+      src.includes(`require.async('./${path.basename(PANEL)}')`),
+      `client.js 没有按需加载 ./${path.basename(PANEL)}`,
+    )
+  })
 
   console.log('\n[1] 路径纯函数')
   await test('parseRemotePath 拆出别名与路径', () => {
