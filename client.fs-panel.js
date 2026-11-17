@@ -135,6 +135,40 @@ window.__ModuleLoader__.load({
     var MAX_EDIT_BYTES = 6 * 1024 * 1024
 
     /**
+     * 首屏 / 每次「显示更多」渲染的条目数。
+     *
+     * 宿主最多返回 2000 条；全部铺成 DOM 时每行 7 个节点，点击任意行
+     * 都会触发整表重渲染，低配现场机会明显卡顿。先渲染 300 条，
+     * 滚动到底再追加，既保留"一眼看到全部"的浏览方式，又把 DOM 压到 1/6。
+     */
+    var VISIBLE_STEP = 300
+
+    /** 截取当前要渲染的条目。抽成纯函数，便于回归测试。 */
+    function visibleEntries(entries, count) {
+      if (!Array.isArray(entries)) return []
+      var limit = Number(count)
+      if (!Number.isFinite(limit) || limit <= 0) return []
+      limit = Math.floor(limit)
+      return entries.length > limit ? entries.slice(0, limit) : entries
+    }
+
+    /** 下一次「显示更多」的数量，永远不超过总数。 */
+    function nextVisibleCount(current, total, step) {
+      var next = Number(current) + (Number(step) > 0 ? Number(step) : VISIBLE_STEP)
+      return next > total ? total : next
+    }
+
+    /** 取消请求时别让 abort 自己抛错打断收尾（重复 abort / 已结束都不该炸）。 */
+    function abortQuietly(controller) {
+      if (controller === null || controller === undefined) return
+      try {
+        controller.abort()
+      } catch (error) {
+        /* 已经结束的请求：什么都不用做 */
+      }
+    }
+
+    /**
      * 这个文件能不能在面板里直接编辑。
      *
      * 大文件不打开编辑器，而是提示用终端里的 vim——在浏览器 textarea 里
@@ -162,7 +196,7 @@ window.__ModuleLoader__.load({
     }
 
     /** 请求后端。统一把 `{ok:false}` 变成 throw，调用方只写 happy path。 */
-    async function callApi(method, route, payload) {
+    async function callApi(method, route, payload, options) {
       var init = { method: method, headers: {} }
       var url = '/__dsh-terminal-workbench/fs' + route
       if (method === 'GET') {
@@ -179,11 +213,47 @@ window.__ModuleLoader__.load({
         init.headers['content-type'] = 'application/json'
         init.body = JSON.stringify(payload === undefined || payload === null ? {} : payload)
       }
+      /* 取消/超时：目录列取和读文件都可能被半死的 SFTP 挂住。
+         只给调用方显式传 timeoutMs 的请求加计时器——写操作不能自动超时，
+         否则"服务端已成功、前端报超时"会诱导用户重试第二次。 */
+      var controller = typeof AbortController === 'function' ? new AbortController() : null
+      var timer = 0
+      var timedOut = false
+      var timeoutMs = options && Number(options.timeoutMs)
+      var externalSignal = options && options.signal !== undefined && options.signal !== null ? options.signal : null
+      var onExternalAbort = null
+      if (controller !== null) {
+        init.signal = controller.signal
+        if (externalSignal !== null) {
+          if (externalSignal.aborted === true) controller.abort()
+          else if (typeof externalSignal.addEventListener === 'function') {
+            onExternalAbort = function () { controller.abort() }
+            externalSignal.addEventListener('abort', onExternalAbort, { once: true })
+          }
+        }
+        if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+          timer = setTimeout(function () {
+            timedOut = true
+            controller.abort()
+          }, timeoutMs)
+        }
+      }
       var response
       try {
         response = await fetch(url, init)
       } catch (error) {
+        /* 超时和用户取消都会走到 AbortError，但语义完全不同：
+           超时要显示红条并结束 loading，取消则静默丢弃。 */
+        if (timedOut) {
+          var timeoutError = new Error('请求超时（' + timeoutMs + 'ms）')
+          timeoutError.name = 'TimeoutError'
+          throw timeoutError
+        }
+        if (error && error.name === 'AbortError') throw error
         throw new Error('网络请求失败：' + (error && error.message !== undefined ? error.message : error))
+      } finally {
+        if (timer !== 0) clearTimeout(timer)
+        if (onExternalAbort !== null) externalSignal.removeEventListener('abort', onExternalAbort)
       }
       var json
       try {
@@ -211,26 +281,28 @@ window.__ModuleLoader__.load({
       /* 注销动态登记（只影响宿主内存里的书签连接，不动 remotes.json）。
          主要给回归测试收尾用：测试注入的假别名不能留在宿主进程里。 */
       disconnect: function (alias) { return callApi('POST', '/disconnect', { alias: alias }) },
-      list: function (path) { return callApi('GET', '/list', { path: path }) },
-      read: function (path) { return callApi('GET', '/read', { path: path }) },
+      list: function (path, options) { return callApi('GET', '/list', { path: path }, options) },
+      read: function (path, options) { return callApi('GET', '/read', { path: path }, options) },
       write: function (path, content, version) { return callApi('POST', '/write', { path: path, content: content, version: version }) },
       mkdir: function (path) { return callApi('POST', '/mkdir', { path: path }) },
       move: function (from, to) { return callApi('POST', '/move', { from: from, to: to }) },
       copy: function (from, to) { return callApi('POST', '/copy', { from: from, to: to }) },
       remove: function (path, recursive) { return callApi('POST', '/remove', { path: path, recursive: recursive, confirm: true }) },
       /* 上传走原始二进制体：文件不经过 JSON/base64，内存占用与文件大小无关。 */
-      upload: function (dir, file, overwrite) {
+      upload: function (dir, file, overwrite, options) {
         var url =
           '/__dsh-terminal-workbench/fs/upload?path=' +
           encodeURIComponent(dir) +
           '&name=' +
           encodeURIComponent(file.name) +
           (overwrite === true ? '&overwrite=1' : '')
-        return fetch(url, {
+        var init = {
           method: 'POST',
           headers: { 'content-type': 'application/octet-stream' },
           body: file,
-        }).then(function (response) {
+        }
+        if (options && options.signal !== undefined && options.signal !== null) init.signal = options.signal
+        return fetch(url, init).then(function (response) {
           return response.json().then(function (json) {
             if (json === null || json === undefined || json.ok !== true) {
               var suffix = json === null || json === undefined || json.code === undefined ? '' : '（' + json.code + '）'
@@ -297,6 +369,8 @@ window.__ModuleLoader__.load({
         var loadingState = react.useState(false)
         var errorState = react.useState('')
         var truncatedState = react.useState(false)
+        /* 当前已渲染的条目数；目录切换时重置为 VISIBLE_STEP。 */
+        var visibleCountState = react.useState(VISIBLE_STEP)
         var selectedState = react.useState('')
         var editorState = react.useState(null)
         var busyState = react.useState(false)
@@ -317,6 +391,8 @@ window.__ModuleLoader__.load({
         var setError = errorState[1]
         var truncated = truncatedState[0]
         var setTruncated = truncatedState[1]
+        var visibleCount = visibleCountState[0]
+        var setVisibleCount = visibleCountState[1]
         var selected = selectedState[0]
         var setSelected = selectedState[1]
         var editor = editorState[0]
@@ -331,9 +407,19 @@ window.__ModuleLoader__.load({
         var aliveRef = react.useRef(true)
         /* 目录请求序号，见 loadDir。 */
         var loadSeqRef = react.useRef(0)
+        /* 当前目录请求的取消句柄：新请求先取消旧请求，卸载时一并取消。 */
+        var abortRef = react.useRef(null)
+        /* 当前上传的取消句柄。 */
+        var uploadAbortRef = react.useRef(null)
+        /* 上传批次序号：取消后立刻重传时，旧批次的回调不能再改新批次的 UI。 */
+        var uploadSeqRef = react.useRef(0)
         react.useEffect(function () {
           aliveRef.current = true
-          return function () { aliveRef.current = false }
+          return function () {
+            aliveRef.current = false
+            abortQuietly(abortRef.current)
+            abortQuietly(uploadAbortRef.current)
+          }
         }, [])
 
         var fail = function (err) {
@@ -404,13 +490,17 @@ window.__ModuleLoader__.load({
           if (nextCwd.alias === '') return
           var target = makeRemotePath(nextCwd.alias, nextCwd.path)
           /* 请求序号：用户连点目录时先发的请求可能后回，慢响应会把
-             新目录的 entries 覆盖成旧目录的。只认最后一次请求。 */
+             新目录的 entries 覆盖成旧目录的。只认最后一次请求。
+             取消旧请求是第二道保险：序号只丢结果，取消能把在途连接也放掉。 */
           loadSeqRef.current += 1
           var seq = loadSeqRef.current
+          abortQuietly(abortRef.current)
+          var controller = typeof AbortController === 'function' ? new AbortController() : null
+          abortRef.current = controller
           setLoading(true)
           setError('')
           fsApi
-            .list(target)
+            .list(target, controller === null ? undefined : { signal: controller.signal, timeoutMs: 30000 })
             .then(function (json) {
               if (!aliveRef.current || seq !== loadSeqRef.current) return
               /* 用宿主返回的 path 回填：远端可能做了 realpath 归一（软链解析），
@@ -418,11 +508,14 @@ window.__ModuleLoader__.load({
               var real = typeof json.path === 'string' ? json.path : nextCwd.path
               setCwd({ alias: nextCwd.alias, path: real })
               setEntries(Array.isArray(json.entries) ? json.entries : [])
+              setVisibleCount(VISIBLE_STEP)
               setTruncated(json.truncated === true)
               setLoading(false)
             })
             .catch(function (err) {
               if (!aliveRef.current || seq !== loadSeqRef.current) return
+              /* 用户切目录/关面板导致的取消不是错误，不要弹红条。 */
+              if (err && err.name === 'AbortError') return
               setLoading(false)
               fail(err)
             })
@@ -469,7 +562,7 @@ window.__ModuleLoader__.load({
           var target = makeRemotePath(cwd.alias, joinRemotePath(cwd.path, entry.name))
           setBusy(true)
           fsApi
-            .read(target)
+            .read(target, { timeoutMs: 30000 })
             .then(function (json) {
               if (!aliveRef.current) return
               setBusy(false)
@@ -598,13 +691,22 @@ window.__ModuleLoader__.load({
         /* ---------- 上传 ----------
            逐个文件串行传：并行上传会让进度条和错误归属都变乱。
            同名先按当前清单确认再传；清单之外的同名文件由宿主 409 兜底。 */
+        var cancelUpload = function () {
+          abortQuietly(uploadAbortRef.current)
+          uploadAbortRef.current = null
+        }
         var uploadFiles = function (files) {
           if (files.length === 0) return
+          /* 正常 UI 在上传中会禁用按钮；这里再兜一层，防止旧批次继续占着连接。 */
+          abortQuietly(uploadAbortRef.current)
           var dir = makeRemotePath(cwd.alias, cwd.path)
           var index = 0
+          var runId = uploadSeqRef.current + 1
+          uploadSeqRef.current = runId
           var run = function () {
-            if (!aliveRef.current) return
+            if (!aliveRef.current || uploadSeqRef.current !== runId) return
             if (index >= files.length) {
+              uploadAbortRef.current = null
               setUploading(null)
               setBusy(false)
               refresh()
@@ -628,13 +730,18 @@ window.__ModuleLoader__.load({
                 return
               }
             }
+            /* 每个文件一个取消句柄：用户点“取消”只中止当前文件，
+               队列不再继续；宿主侧会因请求中断把临时文件清掉。 */
+            var controller = typeof AbortController === 'function' ? new AbortController() : null
+            uploadAbortRef.current = controller
+            var options = controller === null ? undefined : { signal: controller.signal }
             var send = function (overwrite) {
-              return fsApi.upload(dir, file, overwrite).catch(function (err) {
+              return fsApi.upload(dir, file, overwrite, options).catch(function (err) {
                 if (err && err.code === 'FS_EXISTS') {
                   var retry = window.confirm(
                     text('fs.confirmOverwrite', '远端已存在同名文件，覆盖？') + '\n' + file.name,
                   )
-                  if (retry) return fsApi.upload(dir, file, true)
+                  if (retry) return fsApi.upload(dir, file, true, options)
                   return undefined
                 }
                 throw err
@@ -642,13 +749,20 @@ window.__ModuleLoader__.load({
             }
             send(exists)
               .then(function () {
+                if (!aliveRef.current || uploadSeqRef.current !== runId) return
+                uploadAbortRef.current = null
                 index += 1
                 run()
               })
               .catch(function (err) {
-                if (!aliveRef.current) return
+                if (!aliveRef.current || uploadSeqRef.current !== runId) return
+                uploadAbortRef.current = null
                 setUploading(null)
                 setBusy(false)
+                if (err && err.name === 'AbortError') {
+                  setError(text('fs.uploadCancelled', '已取消上传'))
+                  return
+                }
                 fail(err)
               })
           }
@@ -697,7 +811,18 @@ window.__ModuleLoader__.load({
           }, part))
         })
 
-        var rows = entries.map(function (entry) {
+        var shown = visibleEntries(entries, visibleCount)
+        /* 滚动到底自动追加一页；按钮是键盘/触屏的兜底入口。 */
+        var onListScroll = function (event) {
+          if (shown.length >= entries.length) return
+          var node = event.currentTarget
+          if (node.scrollTop + node.clientHeight >= node.scrollHeight - 80) {
+            setVisibleCount(function (value) {
+              return nextVisibleCount(value, entries.length, VISIBLE_STEP)
+            })
+          }
+        }
+        var rows = shown.map(function (entry) {
           return h('div', {
             key: entry.name,
             className: 'tp-fs-row',
@@ -853,18 +978,27 @@ window.__ModuleLoader__.load({
           h('div', { key: 'path', className: 'tp-fs-path' }, crumbs),
           uploading === null
             ? null
-            : h(
-                'div',
-                { key: 'uploading', className: 'tp-fs-note' },
-                text('fs.uploading', '上传中') +
-                  ' ' +
-                  uploading.name +
-                  '（' +
-                  uploading.index +
-                  '/' +
-                  uploading.total +
-                  '）',
-              ),
+            : h('div', { key: 'uploading', className: 'tp-fs-upload' }, [
+                h(
+                  'span',
+                  { key: 't' },
+                  text('fs.uploading', '上传中') +
+                    ' ' +
+                    uploading.name +
+                    '（' +
+                    uploading.index +
+                    '/' +
+                    uploading.total +
+                    '）',
+                ),
+                h('button', {
+                  key: 'x',
+                  type: 'button',
+                  className: 'tp-fs-op',
+                  title: text('fs.cancelUpload', '取消上传'),
+                  onClick: cancelUpload,
+                }, '✕'),
+              ]),
           error === '' ? null : h('div', { key: 'err', className: 'tp-fs-error' }, [
             h('span', { key: 't' }, error),
             h('button', {
@@ -874,7 +1008,21 @@ window.__ModuleLoader__.load({
               onClick: function () { setError('') },
             }, '✕'),
           ]),
-          h('div', { key: 'body', className: 'tp-fs-body' }, body),
+          h('div', { key: 'body', className: 'tp-fs-body', onScroll: onListScroll }, [
+            h(react.Fragment, { key: 'content' }, body),
+            shown.length < entries.length
+              ? h('button', {
+                  key: 'more',
+                  type: 'button',
+                  className: 'tp-fs-more',
+                  onClick: function () {
+                    setVisibleCount(function (value) {
+                      return nextVisibleCount(value, entries.length, VISIBLE_STEP)
+                    })
+                  },
+                }, text('fs.showMore', '显示更多') + '（' + shown.length + ' / ' + entries.length + '）')
+              : null,
+          ]),
           truncated ? h('div', { key: 'note', className: 'tp-fs-note' }, text('fs.truncated', '条目过多，只显示前 2000 个')) : null,
           /* 这里必须包一层带 key 的元素：editorView 本身是 h() 的产物，
              它的 key 在数组里得由自己带——直接放对象进数组 React 会报
@@ -896,6 +1044,9 @@ window.__ModuleLoader__.load({
     module.exports.canEditFile = canEditFile
     module.exports.iconOf = iconOf
     module.exports.MAX_EDIT_BYTES = MAX_EDIT_BYTES
+    module.exports.VISIBLE_STEP = VISIBLE_STEP
+    module.exports.visibleEntries = visibleEntries
+    module.exports.nextVisibleCount = nextVisibleCount
     module.exports.fsApi = fsApi
     module.exports.initialPathOf = initialPathOf
     module.exports.createFsPanel = createFsPanel

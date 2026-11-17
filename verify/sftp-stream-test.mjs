@@ -215,6 +215,31 @@ await check('目录不能当文件覆盖（FS_IS_DIRECTORY）', async () => {
   assert.strictEqual(caught?.code, 'FS_IS_DIRECTORY')
 })
 
+await check('上传源流中断：临时文件不残留、目标不被截断', async () => {
+  const tmpBefore = fs.readdirSync(mapPath('/tmp')).filter((name) => name.includes('.dsh-twb-'))
+  const source = new Readable({
+    read() {
+      this.destroy(new Error('client aborted'))
+    },
+  })
+  let caught = null
+  try {
+    await backend.writeStream('/tmp/中断.bin', source, { overwrite: true })
+  } catch (error) {
+    caught = error
+  }
+  assert.ok(caught, '源流中断必须抛错')
+  /* 清理是 fire-and-forget（不能让 unlink 卡住错误上报），这里等它落地。 */
+  const deadline = Date.now() + 1000
+  let tmpAfter = fs.readdirSync(mapPath('/tmp')).filter((name) => name.includes('.dsh-twb-'))
+  while (tmpAfter.length > tmpBefore.length && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    tmpAfter = fs.readdirSync(mapPath('/tmp')).filter((name) => name.includes('.dsh-twb-'))
+  }
+  assert.deepStrictEqual(tmpAfter, tmpBefore, '临时文件必须被清掉')
+  assert.strictEqual(fs.existsSync(mapPath('/tmp/中断.bin')), false)
+})
+
 /* ---------- 宿主路由层：HTTP 请求 ↔ 真实 SFTP 流 ---------- */
 const routes = new Map()
 registerFsApi(

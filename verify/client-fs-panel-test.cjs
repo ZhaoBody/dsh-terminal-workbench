@@ -228,6 +228,21 @@ async function main() {
     assert.strictEqual(typeof panel.fsApi.upload, 'function')
     assert.strictEqual(typeof panel.fsApi.downloadUrl, 'function')
   })
+  await test('visibleEntries 只切前 N 条，不修改原数组', () => {
+    const entries = Array.from({ length: 2000 }, (_, index) => ({ name: String(index) }))
+    assert.strictEqual(panel.VISIBLE_STEP, 300)
+    assert.strictEqual(panel.visibleEntries(entries, 300).length, 300)
+    assert.strictEqual(panel.visibleEntries(entries, 5000).length, 2000)
+    assert.deepStrictEqual(panel.visibleEntries([], 300), [])
+    assert.deepStrictEqual(panel.visibleEntries(null, 300), [])
+    assert.deepStrictEqual(panel.visibleEntries(entries, 0), [])
+    assert.strictEqual(entries.length, 2000, '不能原地裁剪调用方的数组')
+  })
+  await test('nextVisibleCount 到总数封顶', () => {
+    assert.strictEqual(panel.nextVisibleCount(300, 2000, 300), 600)
+    assert.strictEqual(panel.nextVisibleCount(1800, 2000, 300), 2000)
+    assert.strictEqual(panel.nextVisibleCount(0, 2000, 300), 300)
+  })
   await test('downloadUrl 编码中文/空格，不把 # ? & 当语法', () => {
     const url = panel.fsApi.downloadUrl('remote:车 A:/tmp/日志 1#2&3.txt')
     assert.ok(url.startsWith('/__dsh-terminal-workbench/fs/download?path='))
@@ -278,6 +293,46 @@ async function main() {
       const out = await panel.fsApi.upload('remote:boxa:/tmp', { name: 'a.txt' }, true)
       assert.strictEqual(out.ok, true)
       assert.ok(calls[0].url.includes('overwrite=1'))
+    } finally {
+      global.fetch = origFetch
+    }
+  })
+  await test('upload 透传 AbortSignal，便于取消', async () => {
+    const calls = []
+    const origFetch = global.fetch
+    try {
+      global.fetch = async (url, init) => {
+        calls.push({ url, init })
+        return { status: 200, json: async () => ({ ok: true, name: 'a.txt' }) }
+      }
+      const controller = new AbortController()
+      await panel.fsApi.upload('remote:boxa:/tmp', { name: 'a.txt' }, false, { signal: controller.signal })
+      assert.strictEqual(calls[0].init.signal, controller.signal)
+    } finally {
+      global.fetch = origFetch
+    }
+  })
+  await test('list 超时抛 TimeoutError，外部取消抛 AbortError', async () => {
+    const origFetch = global.fetch
+    try {
+      global.fetch = (url, init) => new Promise((resolve, reject) => {
+        const fail = () => {
+          const error = new Error('aborted')
+          error.name = 'AbortError'
+          reject(error)
+        }
+        if (init.signal.aborted) fail()
+        else init.signal.addEventListener('abort', fail, { once: true })
+      })
+      /* 超时必须让面板结束 loading 并显示原因，不能和"切目录取消"一样静默。 */
+      await assert.rejects(
+        panel.fsApi.list('remote:boxa:/tmp', { timeoutMs: 10 }),
+        (error) => error.name === 'TimeoutError' && /超时/.test(error.message),
+      )
+      const controller = new AbortController()
+      const pending = panel.fsApi.list('remote:boxa:/tmp', { signal: controller.signal })
+      controller.abort()
+      await assert.rejects(pending, (error) => error.name === 'AbortError')
     } finally {
       global.fetch = origFetch
     }

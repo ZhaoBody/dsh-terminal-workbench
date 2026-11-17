@@ -662,7 +662,7 @@ window.__ModuleLoader__.load({
     var CAMERA_CACHE = null
     /* 构建版本戳：自测用它判断浏览器加载的是否为磁盘上的最新构建。
        每次实质性改动手动 bump，避免拿旧产物当证据。 */
-    var BUILD_STAMP = '2026-11-15.06'
+    var BUILD_STAMP = '2026-11-17.01'
     var FILES_COLLAPSED_KEY = 'dsh-terminal-workbench.fileRowCollapsed'
 
     function readFilesCollapsed() {
@@ -1764,6 +1764,8 @@ window.__ModuleLoader__.load({
       '.tp-fs-error>span{flex:1}',
       '.tp-fs-body{flex:1;min-height:0;overflow:auto}',
       '.tp-fs-list{display:flex;flex-direction:column}',
+      '.tp-fs-more{display:block;width:calc(100% - 16px);margin:6px 8px;padding:5px 8px;border:.5px solid #3a3a42;border-radius:6px;background:#1c1c20;color:#9ca3af;font-size:11px;cursor:pointer}',
+      '.tp-fs-more:hover{color:#e5e7eb;background:#26262b}',
       '.tp-fs-row{display:flex;align-items:center;gap:6px;padding:3px 8px;font-size:12px;color:#d4d4d8;cursor:default;user-select:none}',
       '.tp-fs-row:hover{background:#1c1c20}',
       '.tp-fs-row[data-selected=true]{background:#26262b}',
@@ -1777,6 +1779,8 @@ window.__ModuleLoader__.load({
       '.tp-fs-op:hover{background:#3a3a42;color:#e5e7eb}',
       '.tp-fs-empty{padding:16px 12px;color:#6b7280;font-size:11px;text-align:center}',
       '.tp-fs-note{padding:4px 8px;color:#6b7280;font-size:10px;flex:none}',
+      '.tp-fs-upload{display:flex;align-items:center;gap:6px;padding:4px 8px;color:#6b7280;font-size:10px;flex:none}',
+      '.tp-fs-upload>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.tp-fs-editor{position:absolute;left:0;right:0;top:0;bottom:0;z-index:2;display:flex;flex-direction:column;background:#0e0e10}',
       '.tp-fs-editor-head{display:flex;align-items:center;gap:4px;padding:6px 8px;flex:none;border-bottom:.5px solid var(--dsw-alias-border-l2,#2c2c2e)}',
       '.tp-fs-editor-title{flex:1;min-width:0;font-size:11px;color:#e5e7eb;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
@@ -8919,6 +8923,9 @@ window.__ModuleLoader__.load({
               'fs.cancel': '取消',
               'fs.upload': '上传文件',
               'fs.uploading': '上传中',
+              'fs.uploadCancelled': '已取消上传',
+              'fs.cancelUpload': '取消上传',
+              'fs.showMore': '显示更多',
               'fs.download': '下载',
               'fs.confirmOverwrite': '远端已存在同名文件，覆盖？',
               'fs.pickAlias': '选择远端…',
@@ -8989,6 +8996,9 @@ window.__ModuleLoader__.load({
               'fs.cancel': 'Cancel',
               'fs.upload': 'Upload file',
               'fs.uploading': 'Uploading',
+              'fs.uploadCancelled': 'Upload cancelled',
+              'fs.cancelUpload': 'Cancel upload',
+              'fs.showMore': 'Show more',
               'fs.download': 'Download',
               'fs.confirmOverwrite': 'A file with the same name already exists on the remote. Overwrite?',
               'fs.pickAlias': 'Choose a remote…',
