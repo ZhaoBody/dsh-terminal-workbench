@@ -1,5 +1,15 @@
 # dsh-terminal-workbench
 
+**版本：`v0.13.18`** ｜ **平台：DSH Web（浏览器端）** ｜ **Node.js ≥ 20**
+
+> **适用范围**：本插件面向 **DeepSeek Harness Web**——用 `dsh <profile> --port 3080`
+> 启动后，在浏览器打开 `http://127.0.0.1:3080` 使用。宿主侧跑在 Node.js 上，
+> 浏览器侧由 `client.js` 与按需加载的 chunk 组成。
+>
+> **不适用**：DSH 的终端 TUI、纯 CLI 单次调用、桌面客户端。本插件不提供独立的
+> Web 服务，必须挂在 DSH 的 **web profile** 下运行（`package.json` 中
+> `dsh.client.platform = "web"`）。
+
 把 DeepSeek Harness 改造成一个**终端工作台**：左边会话、中间真终端、右边对话，
 并且让模型能用一组工具在自己的终端里干活——但**碰别人的终端、删远端文件、开隧道要你点头**。
 
@@ -408,6 +418,10 @@ SSH 隧道（3 个）：
 
 ## 安装
 
+> 只支持 **DSH Web** profile：装完后用 `dsh <profile> --port 3080` 启动，浏览器访问。
+> 不要装到 TUI / 纯 CLI profile 里——那里没有 `webServer`，文件面板、相机标签、
+> 网页标签都不会工作。
+
 从源码目录安装（需要 Node.js 20+）：
 
 ```bash
@@ -432,11 +446,11 @@ dsh plugin --profile <profile> add "file:$(pwd)/dsh-terminal-workbench-<version>
 
 ```text
 .
-├── lib/                    # 宿主侧（Node.js）
+├── lib/                    # 宿主侧（Node.js，DSH Web 服务端）
 ├── src/                    # 前端构建源（xterm 渲染）
 ├── verify/                 # 回归测试（node verify/run-all.mjs）
 ├── locale/                 # 中英文文案
-├── client.js               # 浏览器半侧入口
+├── client.js               # 浏览器半侧入口（DSH Web）
 ├── client.terminal.js      # xterm 渲染 chunk（构建产物）
 ├── client.fs-panel.js      # 文件面板 chunk（按需加载）
 ├── build.mjs               # esbuild 构建脚本
